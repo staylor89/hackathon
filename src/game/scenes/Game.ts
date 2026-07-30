@@ -35,8 +35,19 @@ const DDOS_SPEED = 110;       // px/sec along the trench
 const DDOS_HP = 30;           // +10 per wave
 const DDOS_DAMAGE = 10;       // integrity lost if it reaches the origin
 const DDOS_BOUNTY = 25;
+const DDOS_SCALE = 0.62;      // tortoise-default.png is 64x64; trench is 46px
 const SPAWN_EVERY = 1500;     // ms
 const WAVE_SIZE = 8;
+
+//  ── Degradation ──────────────────────────────────────────────────────────
+//  Every breach causes a temporary latency spike; each 10% of integrity lost
+//  also trips a permanent tier below. See TIERS in applyTier().
+const BASE_LATENCY = 38;      // ms shown in the HUD when healthy
+const LATENCY_PENALTY = 1.7;  // tower cooldown multiplier while spiking
+const SPIKE_MS = 1500;        // how long a spike lasts, grows with damage
+const BROWNOUT_EVERY = 4000;  // ms between brownouts once they start
+const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
+const OFFLINE = 0x475569;
 
 //  Cable route: enemies walk from off-screen left to the origin server.
 const WAYPOINTS: [number, number][] = [
@@ -63,6 +74,9 @@ interface Tower {
     x: number;
     y: number;
     cooldown: number;
+    offline: boolean;
+    box: GameObjects.Rectangle;
+    label: GameObjects.Text;
 }
 
 interface Bullet {
@@ -80,6 +94,15 @@ export class Game extends Scene
     spawned = 0;
     over = false;
 
+    //  Degradation state — all of this worsens as the origin takes damage.
+    bounty = DDOS_BOUNTY;
+    fireRateMult = 1;         // >1 means slower shots
+    spawnDelay = SPAWN_EVERY;
+    spikeMs = SPIKE_MS;
+    spikeUntil = 0;           // scene time the current latency spike ends
+    latency = BASE_LATENCY;   // displayed p99, tweened back down after a spike
+    tiersHit = 0;
+
     //  Live objects
     enemies: Enemy[] = [];
     towers: Tower[] = [];
@@ -87,12 +110,17 @@ export class Game extends Scene
 
     route: Phaser.Curves.Path;
     spawner: Phaser.Time.TimerEvent;
+    brownoutTimer?: Phaser.Time.TimerEvent;
+    spikeTween?: Phaser.Tweens.Tween;
 
     //  HUD
     budgetText: GameObjects.Text;
     waveText: GameObjects.Text;
     integrityText: GameObjects.Text;
     integrityBar: GameObjects.Rectangle;
+    latencyText: GameObjects.Text;
+    statusText: GameObjects.Text;
+    vignette: GameObjects.Rectangle;
 
     constructor ()
     {
@@ -115,8 +143,14 @@ export class Game extends Scene
         this.enemies = [];
         this.towers = [];
         this.bullets = [];
-
-        this.makeTextures();
+        this.bounty = DDOS_BOUNTY;
+        this.fireRateMult = 1;
+        this.spawnDelay = SPAWN_EVERY;
+        this.spikeMs = SPIKE_MS;
+        this.spikeUntil = 0;
+        this.latency = BASE_LATENCY;
+        this.tiersHit = 0;
+        this.brownoutTimer = undefined;
 
         this.add.rectangle(512, 384, 1024, 768, BG);
 
@@ -128,32 +162,11 @@ export class Game extends Scene
         this.drawPads();
         this.drawHud();
 
-        this.spawner = this.time.addEvent({
-            delay: SPAWN_EVERY,
-            loop: true,
-            callback: () => this.spawnDdos()
-        });
+        this.setSpawnDelay(SPAWN_EVERY);
 
         this.input.keyboard?.once('keydown-ESC', () => {
             this.scene.start('MainMenu');
         });
-    }
-
-    //  No art in the repo — enemy and bullet textures are drawn at boot.
-    makeTextures ()
-    {
-        if (!this.textures.exists('ddos'))
-        {
-            const g = this.make.graphics({ x: 0, y: 0 }, false);
-            g.fillStyle(0x7f1d1d, 1);
-            g.fillCircle(15, 15, 14);
-            g.fillStyle(RED, 1);
-            g.fillCircle(15, 15, 10);
-            g.fillStyle(0xfecaca, 1);
-            g.fillCircle(15, 15, 3.5);
-            g.generateTexture('ddos', 30, 30);
-            g.destroy();
-        }
     }
 
     // ── Map ──────────────────────────────────────────────────────────────
@@ -418,7 +431,7 @@ export class Game extends Scene
         label.setScale(0.4);
         this.tweens.add({ targets: [box, label], scale: 1, duration: 180, ease: 'Back.Out' });
 
-        this.towers.push({ x, y, cooldown: 0 });
+        this.towers.push({ x, y, cooldown: 0, offline: false, box, label });
     }
 
     // ── Combat ───────────────────────────────────────────────────────────
@@ -433,7 +446,9 @@ export class Game extends Scene
 
         const maxHp = DDOS_HP + (this.wave - 1) * 10;
         const start = this.route.getStartPoint();
-        const obj = this.add.follower(this.route, start.x, start.y, 'ddos').setDepth(5);
+        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-default')
+            .setDepth(5)
+            .setScale(DDOS_SCALE);
 
         const barBg = this.add.rectangle(0, 0, 28, 5, 0x000000, 0.6).setDepth(6);
         const bar = this.add.rectangle(0, 0, 26, 3, RED).setOrigin(0, 0.5).setDepth(6);
@@ -443,11 +458,19 @@ export class Game extends Scene
         obj.startFollow({
             duration: (this.route.getLength() / DDOS_SPEED) * 1000,
             positionOnPath: true,
+            //  The art faces right, which matches 0 degrees, so no offset needed.
+            rotateToPath: true,
             onComplete: () => this.breach(enemy)
         });
 
+        //  Scuttle: a small pulse around the base scale, not an absolute one.
         this.tweens.add({
-            targets: obj, scale: 1.18, duration: 380, yoyo: true, repeat: -1, ease: 'Sine.InOut'
+            targets: obj,
+            scale: DDOS_SCALE * 1.12,
+            duration: 380,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.InOut'
         });
 
         this.enemies.push(enemy);
@@ -458,6 +481,7 @@ export class Game extends Scene
     {
         if (!enemy.alive || this.over) return;
 
+        const { x, y } = enemy.obj;
         this.killEnemy(enemy, false);
 
         this.integrity = Math.max(0, this.integrity - DDOS_DAMAGE);
@@ -469,7 +493,170 @@ export class Game extends Scene
         this.cameras.main.shake(180, 0.006);
         this.cameras.main.flash(120, 239, 68, 68);
 
-        if (this.integrity <= 0) this.fail();
+        //  Floating damage readout.
+        const hit = this.add.text(x, y - 30, `-${DDOS_DAMAGE}% INTEGRITY`, {
+            fontFamily: 'Arial Black', fontSize: 13, color: '#ef4444'
+        }).setOrigin(0.5).setDepth(9);
+
+        this.tweens.add({
+            targets: hit, y: y - 70, alpha: 0, duration: 900, onComplete: () => hit.destroy()
+        });
+
+        if (this.integrity <= 0)
+        {
+            this.fail();
+            return;
+        }
+
+        this.latencySpike();
+        this.applyTiers();
+    }
+
+    // ── Damage side effects ──────────────────────────────────────────────
+
+    //  Every breach: the region gets slow for a moment. Towers fire late and
+    //  the p99 readout jumps, then eases back to the new baseline.
+    latencySpike ()
+    {
+        const peak = 180 + (100 - this.integrity) * 6;
+
+        //  A second breach mid-spike would otherwise fight over the readout.
+        this.spikeTween?.remove();
+
+        this.spikeUntil = this.time.now + this.spikeMs;
+        this.latency = peak;
+        this.latencyText.setColor('#ef4444');
+        this.latencyText.setText(`p99 ${Math.round(peak)}ms  ·  SPIKE`);
+
+        //  Ease the number back down over the life of the spike.
+        this.spikeTween = this.tweens.addCounter({
+            from: peak,
+            to: BASE_LATENCY + (100 - this.integrity) * 1.5,
+            duration: this.spikeMs,
+            ease: 'Cubic.Out',
+            onUpdate: tween => {
+                this.latency = tween.getValue() ?? BASE_LATENCY;
+                this.latencyText.setText(`p99 ${Math.round(this.latency)}ms  ·  SPIKE`);
+            },
+            onComplete: () => {
+                this.latencyText.setColor('#5c728a');
+                this.latencyText.setText(`p99 ${Math.round(this.latency)}ms`);
+            }
+        });
+    }
+
+    //  One permanent tier per 10% of integrity lost.
+    applyTiers ()
+    {
+        const tiers: { at: number, run: () => void }[] = [
+            { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
+            { at: 80, run: () => this.killPowerDomain(12, 0, 4, 3, 'PWR-A') },
+            { at: 70, run: () => { this.bounty = 20; this.flashHud('BILLING THROTTLED  ·  BOUNTY $20'); } },
+            { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setSpawnDelay(1300); } },
+            { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
+            { at: 40, run: () => { this.killPowerDomain(0, 8, 4, 3, 'PWR-B'); this.spikeMs = 4000; } },
+            { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setSpawnDelay(1100); } },
+            { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
+            { at: 10, run: () => { this.fireRateMult = 1.2; this.setSpawnDelay(900); this.flashHud('REGION FAILING'); } }
+        ];
+
+        //  tiersHit counts how many have fired, so each one runs exactly once
+        //  even if a future enemy deals more than 10% in a single breach.
+        while (this.tiersHit < tiers.length && this.integrity <= tiers[this.tiersHit].at)
+        {
+            tiers[this.tiersHit].run();
+            this.tiersHit++;
+        }
+    }
+
+    setStatus (label: string, colour: string)
+    {
+        this.statusText.setText(label);
+        this.statusText.setColor(colour);
+
+        this.tweens.add({
+            targets: this.statusText, alpha: 0.2, duration: 160, yoyo: true, repeat: 3
+        });
+    }
+
+    //  A rack region loses power: dimmed tiles and an offline label.
+    killPowerDomain (col: number, row: number, w: number, h: number, name: string)
+    {
+        const x = col * TILE;
+        const y = FLOOR_Y + row * TILE;
+
+        const shroud = this.add.rectangle(x, y, w * TILE, h * TILE, 0x000000, 0)
+            .setOrigin(0, 0)
+            .setDepth(3);
+
+        const label = this.add.text(x + w * TILE / 2, y + h * TILE / 2, `${name}\nOFFLINE`, {
+            fontFamily: 'Arial Black', fontSize: 14, color: '#ef4444', align: 'center'
+        }).setOrigin(0.5).setDepth(3).setAlpha(0);
+
+        this.tweens.add({ targets: shroud, fillAlpha: 0.62, duration: 500 });
+        this.tweens.add({ targets: label, alpha: 0.75, duration: 500, delay: 200 });
+    }
+
+    //  Red edge pulse once the region is critical.
+    startVignette ()
+    {
+        this.vignette = this.add.rectangle(512, 384, 1016, 760)
+            .setStrokeStyle(10, RED, 0.5)
+            .setDepth(9);
+
+        this.tweens.add({
+            targets: this.vignette, alpha: 0.25, duration: 800, yoyo: true, repeat: -1, ease: 'Sine.InOut'
+        });
+    }
+
+    //  Random towers drop offline for a moment.
+    startBrownouts ()
+    {
+        this.brownoutTimer = this.time.addEvent({
+            delay: BROWNOUT_EVERY,
+            loop: true,
+            callback: () => {
+                if (this.over || this.towers.length === 0) return;
+
+                const live = this.towers.filter(t => !t.offline);
+                if (live.length === 0) return;
+
+                const t = PhaserMath.RND.pick(live);
+                t.offline = true;
+                t.box.setStrokeStyle(2, OFFLINE);
+                t.label.setColor('#475569');
+
+                this.time.delayedCall(BROWNOUT_MS, () => {
+                    t.offline = false;
+                    t.box.setStrokeStyle(2, ACCENT);
+                    t.label.setColor('#ff9900');
+                });
+            }
+        });
+    }
+
+    setSpawnDelay (ms: number)
+    {
+        this.spawnDelay = ms;
+        this.spawner?.remove();
+        this.spawner = this.time.addEvent({
+            delay: ms,
+            loop: true,
+            callback: () => this.spawnDdos()
+        });
+    }
+
+    //  Brief banner under the HUD when a tier trips.
+    flashHud (message: string)
+    {
+        const banner = this.add.text(512, 92, message, {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#ef4444',
+            backgroundColor: '#1a0d0d', padding: { x: 12, y: 6 }
+        }).setOrigin(0.5).setDepth(11);
+
+        this.tweens.add({
+            targets: banner, alpha: 0, delay: 1600, duration: 500, onComplete: () => banner.destroy()
+        });
     }
 
     killEnemy (enemy: Enemy, reward: boolean)
@@ -484,7 +671,7 @@ export class Game extends Scene
         if (!reward) return;
 
         this.score += 10;
-        this.budget += DDOS_BOUNTY;
+        this.budget += this.bounty;
         this.budgetText.setText(`$${this.budget}`);
     }
 
@@ -535,21 +722,27 @@ export class Game extends Scene
         {
             if (!e.alive) continue;
 
-            e.barBg.setPosition(e.obj.x, e.obj.y - 22);
-            e.bar.setPosition(e.obj.x - 13, e.obj.y - 22);
+            e.barBg.setPosition(e.obj.x, e.obj.y - 28);
+            e.bar.setPosition(e.obj.x - 13, e.obj.y - 28);
             e.bar.width = 26 * (e.hp / e.maxHp);
         }
 
         //  Towers acquire the closest target in range and shoot on cooldown.
+        //  Cooldown is stretched by cooling loss and by any active latency spike.
+        const spiking = this.time.now < this.spikeUntil;
+        const rate = SHIELD_RATE * this.fireRateMult * (spiking ? LATENCY_PENALTY : 1);
+
         for (const t of this.towers)
         {
+            if (t.offline) continue;
+
             t.cooldown -= delta;
             if (t.cooldown > 0) continue;
 
             const target = this.nearestEnemy(t.x, t.y, SHIELD_RANGE);
             if (!target) continue;
 
-            t.cooldown = SHIELD_RATE;
+            t.cooldown = rate;
             this.fire(t, target);
         }
 
@@ -618,7 +811,7 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 20, color: '#e6edf3'
         }).setDepth(10);
 
-        this.add.text(16, 40, 'DATA HALL 1  ·  AZ-C  ·  not on the status page', {
+        this.add.text(16, 40, 'DATA HALL 1  ·  AZ-C', {
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setDepth(10);
 
@@ -640,6 +833,14 @@ export class Game extends Scene
 
         this.add.text(512, 52, 'click a slot to build a SHIELD  ·  ESC menu', {
             fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
+        }).setOrigin(0.5, 0).setDepth(10);
+
+        this.statusText = this.add.text(300, 14, 'HEALTHY', {
+            fontFamily: 'Arial Black', fontSize: 16, color: '#22c55e'
+        }).setOrigin(0.5, 0).setDepth(10);
+
+        this.latencyText = this.add.text(300, 40, `p99 ${BASE_LATENCY}ms`, {
+            fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
     }
 }

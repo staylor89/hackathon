@@ -26,9 +26,8 @@ export class Preloader extends Scene
 
     preload ()
     {
-        //  No image assets yet — game art is generated in create() below.
-        //  Add real files here as they arrive, e.g.:
-        //  this.load.image('tortoise', 'assets/tortoise.png');
+        //  DDoS intruder. 64x64, drawn facing right.
+        this.load.image('tortoise-default', 'assets/tortoise-default.png');
     }
 
     create ()

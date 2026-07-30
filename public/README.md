@@ -163,3 +163,24 @@ Palette:
 
 Snowmobile is the only non-round silhouette, deliberately - it should read as
 hardware, not a turret, at a glance.
+
+## Firing lanes
+
+Making the projectile path legible takes three things beyond the tower art.
+
+| Key             | Size    | Use |
+|-----------------|---------|-----|
+| shot-range      | 128x128 | Dashed footprint. Scale to the tower's real radius; show on place / select / hover. |
+| shot-tracer          | 48x8    | The lane. Stretch (don't tile) from muzzle to impact, rotate to the firing angle, fade over ~120ms. |
+| shot-muzzle    | 20x20   | Bloom at the bore on each shot, rotated to the firing angle. |
+| shot-iam        | 16x16   | Key bolt. Fast, point-first. |
+| shot-waf        | 20x20   | Flak burst. Radial, no facing - use for the airburst too. |
+| shot-shield     | 24x24   | Pulse ring. Scale up from 0 as it expands rather than translating. |
+| shot-snowmobile | 24x12   | Heavy slug. Slow, large, one at a time. |
+
+Every lane piece shares the shot- prefix, so the firing system groups together
+in the asset list and in the Preloader.
+
+All directional pieces are drawn pointing RIGHT (0 degrees), same as the mobs,
+so setRotation to the firing angle works without offsets. Orange stays the
+tower/UI colour throughout - the lanes read as the player's own fire.

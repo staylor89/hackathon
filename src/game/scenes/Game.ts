@@ -23,27 +23,71 @@ const CYAN = 0x38bdf8;
 const PAD_LINE = 0x2a3f5a;
 const RACK = 0x0f1a2b;
 const RACK_LIP = 0x27384f;
+const VIOLET = 0xa855f7;
 
-//  ── Balance ──────────────────────────────────────────────────────────────
+//  ── Towers ───────────────────────────────────────────────────────────────
 //  SHIELD: rapid fire, tiny per-shot damage. Built to shred swarms, poor
 //  against anything with real HP.
-const SHIELD_COST = 100;
-const SHIELD_RANGE = 130;
-const SHIELD_RATE = 120;      // ms between shots
-const SHIELD_DAMAGE = 4;
-const BULLET_SPEED = 780;     // px/sec — must outpace the fire rate
+//  WAF: slow, expensive, huge per-shot damage. The answer to injection
+//  flyers; wasted on the DDoS swarm because most of each shot is overkill.
+type TowerKind = 'shield' | 'waf';
 
+interface TowerSpec {
+    kind: TowerKind;
+    label: string;            // drawn on the tower box
+    name: string;             // shown in the HUD picker
+    cost: number;
+    range: number;
+    rate: number;             // ms between shots
+    damage: number;
+    bulletSpeed: number;      // px/sec — must outpace the fire rate
+    bulletRadius: number;
+    colour: number;
+    hex: string;
+}
+
+const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
+    shield: {
+        kind: 'shield', label: 'SHLD', name: 'SHIELD',
+        cost: 100, range: 130, rate: 120, damage: 4,
+        bulletSpeed: 780, bulletRadius: 2.5, colour: ACCENT, hex: '#ff9900'
+    },
+    waf: {
+        kind: 'waf', label: 'WAF', name: 'WAF',
+        cost: 175, range: 155, rate: 850, damage: 30,
+        bulletSpeed: 620, bulletRadius: 5, colour: VIOLET, hex: '#a855f7'
+    }
+};
+
+//  ── Enemies ──────────────────────────────────────────────────────────────
 //  DDoS: small, fragile, arrives in a flood. Individually harmless.
 const DDOS_SPEED = 115;       // px/sec along the trench
 const DDOS_HP = 12;           // +3 per wave
 const DDOS_DAMAGE = 3;        // integrity lost if it reaches the origin
-const DDOS_BOUNTY = 8;
 const DDOS_SCALE = 0.34;      // tortoise-ddos.png is 64x64 → ~22px on screen
+const DDOS_BOUNTY = 8;
+
+//  SQL injection: airborne, so it ignores the cable trench entirely and
+//  wanders straight at the origin. Fat HP pool, hurts a lot on arrival.
+const INJECT_SPEED = 100;     // px/sec through the air
+const INJECT_HP = 90;         // +18 per wave
+const INJECT_DAMAGE = 9;
+const INJECT_SCALE = 0.52;
+const INJECT_BOUNTY_MULT = 4; // paid as bounty x this
+const INJECT_SPREAD = 78;     // degrees of random heading either side of "toward origin"
+const INJECT_TURN_MIN = 220;  // ms before it picks a new heading
+const INJECT_TURN_MAX = 640;
+const INJECT_FIRST_WAVE = 2;  // no flyers in wave 1
+const INJECT_SPACING = 1600;  // ms between flyers inside a wave
 
 const SWARM_BASE = 8;         // mobs in wave 1
 const SWARM_GROWTH = 2;       // extra mobs per wave
 const SWARM_SPACING = 180;    // ms between mobs inside a wave
 const WAVE_GAP = 6000;        // ms of quiet between waves
+
+//  Where the flyers are headed — the front face of the origin rack.
+const ORIGIN_X = 960;
+const ORIGIN_ROW = 7;
 
 //  ── Degradation ──────────────────────────────────────────────────────────
 //  Every breach causes a temporary latency spike; each 10% of integrity lost
@@ -68,17 +112,28 @@ const RACK_CELLS: [number, number][] = [
 ];
 
 interface Enemy {
-    obj: GameObjects.PathFollower;
+    //  PathFollower extends Sprite, so ground and air mobs share this field.
+    obj: GameObjects.Sprite;
+    follower?: GameObjects.PathFollower;   // only set for trench walkers
+    flying: boolean;
     hp: number;
     maxHp: number;
+    damage: number;                        // integrity cost of a breach
+    bountyMult: number;
     barBg: GameObjects.Rectangle;
     bar: GameObjects.Rectangle;
+    barW: number;
+    shadow?: GameObjects.Ellipse;          // ground shadow, sells the flight
+    vx: number;
+    vy: number;
+    turnAt: number;                        // scene time to pick a new heading
     alive: boolean;
 }
 
 interface Tower {
     x: number;
     y: number;
+    spec: TowerSpec;
     cooldown: number;
     offline: boolean;
     box: GameObjects.Rectangle;
@@ -88,6 +143,8 @@ interface Tower {
 interface Bullet {
     obj: GameObjects.Arc;
     target: Enemy;
+    damage: number;
+    speed: number;
 }
 
 export class Game extends Scene
@@ -108,6 +165,9 @@ export class Game extends Scene
     latency = BASE_LATENCY;   // displayed p99, tweened back down after a spike
     tiersHit = 0;
 
+    //  Which tower the next click builds.
+    selected: TowerKind = 'shield';
+
     //  Live objects
     enemies: Enemy[] = [];
     towers: Tower[] = [];
@@ -126,6 +186,7 @@ export class Game extends Scene
     latencyText: GameObjects.Text;
     statusText: GameObjects.Text;
     vignette: GameObjects.Rectangle;
+    pickers: Partial<Record<TowerKind, { box: GameObjects.Rectangle, text: GameObjects.Text }>> = {};
 
     constructor ()
     {
@@ -155,6 +216,8 @@ export class Game extends Scene
         this.latency = BASE_LATENCY;
         this.tiersHit = 0;
         this.brownoutTimer = undefined;
+        this.selected = 'shield';
+        this.pickers = {};
 
         this.add.rectangle(512, 384, 1024, 768, BG);
 
@@ -171,6 +234,9 @@ export class Game extends Scene
         this.input.keyboard?.once('keydown-ESC', () => {
             this.scene.start('MainMenu');
         });
+
+        this.input.keyboard?.on('keydown-ONE', () => this.select('shield'));
+        this.input.keyboard?.on('keydown-TWO', () => this.select('waf'));
     }
 
     // ── Map ──────────────────────────────────────────────────────────────
@@ -378,7 +444,8 @@ export class Game extends Scene
         }
     }
 
-    //  One buildable slot: hover shows the range ring, click builds a SHIELD.
+    //  One buildable slot: hover shows the selected tower's range ring, click
+    //  builds it.
     makePad (col: number, row: number)
     {
         const x = this.cx(col);
@@ -388,12 +455,17 @@ export class Game extends Scene
             .setStrokeStyle(1, PAD_LINE, 0.9)
             .setInteractive({ useHandCursor: true });
 
-        const ring = this.add.circle(x, y, SHIELD_RANGE, ACCENT, 0.07)
+        const ring = this.add.circle(x, y, TOWER_SPECS.shield.range, ACCENT, 0.07)
             .setStrokeStyle(1, ACCENT, 0.35)
             .setVisible(false);
 
         pad.on('pointerover', () => {
-            pad.setFillStyle(ACCENT, 0.16).setStrokeStyle(1, ACCENT, 0.9);
+            //  Ring is re-styled on every hover because the pick can change
+            //  between one hover and the next.
+            const spec = TOWER_SPECS[this.selected];
+            pad.setFillStyle(spec.colour, 0.16).setStrokeStyle(1, spec.colour, 0.9);
+            ring.setRadius(spec.range);
+            ring.setFillStyle(spec.colour, 0.07).setStrokeStyle(1, spec.colour, 0.35);
             ring.setVisible(true);
         });
 
@@ -405,7 +477,9 @@ export class Game extends Scene
         pad.on('pointerdown', () => {
             if (this.over) return;
 
-            if (this.budget < SHIELD_COST)
+            const spec = TOWER_SPECS[this.selected];
+
+            if (this.budget < spec.cost)
             {
                 //  Can't afford it — flash the budget red.
                 this.budgetText.setColor('#ef4444');
@@ -413,29 +487,48 @@ export class Game extends Scene
                 return;
             }
 
-            this.budget -= SHIELD_COST;
+            this.budget -= spec.cost;
             this.budgetText.setText(`$${this.budget}`);
 
             pad.disableInteractive();
-            pad.setFillStyle(BG, 0).setStrokeStyle(1, ACCENT, 0.4);
+            pad.setFillStyle(BG, 0).setStrokeStyle(1, spec.colour, 0.4);
             ring.setVisible(false);
 
-            this.buildShield(x, y);
+            this.buildTower(x, y, spec);
         });
     }
 
-    buildShield (x: number, y: number)
+    buildTower (x: number, y: number, spec: TowerSpec)
     {
-        const box = this.add.rectangle(x, y, 40, 40, 0x16243a).setStrokeStyle(2, ACCENT).setDepth(4);
-        const label = this.add.text(x, y, 'SHLD', {
-            fontFamily: 'Arial Black', fontSize: 11, color: '#ff9900'
+        const box = this.add.rectangle(x, y, 40, 40, 0x16243a).setStrokeStyle(2, spec.colour).setDepth(4);
+        const label = this.add.text(x, y, spec.label, {
+            fontFamily: 'Arial Black', fontSize: 11, color: spec.hex
         }).setOrigin(0.5).setDepth(4);
 
         box.setScale(0.4);
         label.setScale(0.4);
         this.tweens.add({ targets: [box, label], scale: 1, duration: 180, ease: 'Back.Out' });
 
-        this.towers.push({ x, y, cooldown: 0, offline: false, box, label });
+        this.towers.push({ x, y, spec, cooldown: 0, offline: false, box, label });
+    }
+
+    //  Change which tower the next click builds.
+    select (kind: TowerKind)
+    {
+        this.selected = kind;
+
+        for (const k of Object.keys(TOWER_SPECS) as TowerKind[])
+        {
+            const picker = this.pickers[k];
+            if (!picker) continue;
+
+            const spec = TOWER_SPECS[k];
+            const on = k === kind;
+
+            picker.box.setStrokeStyle(on ? 2 : 1, spec.colour, on ? 1 : 0.35);
+            picker.box.setFillStyle(spec.colour, on ? 0.18 : 0);
+            picker.text.setColor(on ? spec.hex : '#5c728a');
+        }
     }
 
     // ── Combat ───────────────────────────────────────────────────────────
@@ -448,7 +541,13 @@ export class Game extends Scene
         this.wave++;
 
         const count = SWARM_BASE + (this.wave - 1) * SWARM_GROWTH;
-        this.waveText.setText(`WAVE ${this.wave}  ·  DDoS FLOOD  x${count}`);
+        const flyers = this.wave < INJECT_FIRST_WAVE
+            ? 0
+            : 1 + Math.floor((this.wave - INJECT_FIRST_WAVE) / 2);
+
+        this.waveText.setText(flyers > 0
+            ? `WAVE ${this.wave}  ·  DDoS x${count}  ·  SQLi x${flyers}`
+            : `WAVE ${this.wave}  ·  DDoS FLOOD  x${count}`);
 
         this.time.addEvent({
             delay: SWARM_SPACING,
@@ -456,12 +555,29 @@ export class Game extends Scene
             callback: () => this.spawnDdos()
         });
 
-        //  Next wave starts once this burst has landed plus the current gap,
-        //  which the degradation tiers shorten as the origin takes damage.
-        this.spawner = this.time.delayedCall(
-            count * SWARM_SPACING + this.waveGap,
-            () => this.startWave()
-        );
+        if (flyers > 0)
+        {
+            this.time.addEvent({
+                delay: INJECT_SPACING,
+                repeat: flyers - 1,
+                callback: () => this.spawnInjection()
+            });
+        }
+
+        //  Next wave starts once the longer of the two bursts has landed, plus
+        //  the current gap, which the degradation tiers shorten as the origin
+        //  takes damage.
+        const burst = Math.max(count * SWARM_SPACING, flyers * INJECT_SPACING);
+
+        this.spawner = this.time.delayedCall(burst + this.waveGap, () => this.startWave());
+    }
+
+    //  Register a mob and hand it back, so callers can wire up callbacks that
+    //  close over it.
+    addEnemy (enemy: Enemy)
+    {
+        this.enemies.push(enemy);
+        return enemy;
     }
 
     spawnDdos ()
@@ -477,7 +593,12 @@ export class Game extends Scene
         const barBg = this.add.rectangle(0, 0, 20, 4, 0x000000, 0.6).setDepth(6);
         const bar = this.add.rectangle(0, 0, 18, 2, RED).setOrigin(0, 0.5).setDepth(6);
 
-        const enemy: Enemy = { obj, hp: maxHp, maxHp, barBg, bar, alive: true };
+        const enemy = this.addEnemy({
+            obj, follower: obj, flying: false,
+            hp: maxHp, maxHp, damage: DDOS_DAMAGE, bountyMult: 1,
+            barBg, bar, barW: 18,
+            vx: 0, vy: 0, turnAt: 0, alive: true
+        });
 
         obj.startFollow({
             duration: (this.route.getLength() / DDOS_SPEED) * 1000,
@@ -496,8 +617,69 @@ export class Game extends Scene
             repeat: -1,
             ease: 'Sine.InOut'
         });
+    }
 
-        this.enemies.push(enemy);
+    //  SQL injection flyer. No path — it enters anywhere down the left edge
+    //  and wanders toward the origin, re-rolling its heading every few hundred
+    //  ms, so no fixed set of pads can cover it. update() drives it.
+    spawnInjection ()
+    {
+        if (this.over) return;
+
+        const maxHp = INJECT_HP + (this.wave - 1) * 18;
+        const y = PhaserMath.Between(FLOOR_Y + 60, 768 - 60);
+
+        const obj = this.add.sprite(-40, y, 'tortoise-injection')
+            .setDepth(8)
+            .setScale(INJECT_SCALE);
+
+        const shadow = this.add.ellipse(-40, y + 22, 34, 12, 0x000000, 0.3).setDepth(7);
+
+        const barBg = this.add.rectangle(0, 0, 34, 5, 0x000000, 0.6).setDepth(9);
+        const bar = this.add.rectangle(0, 0, 32, 3, VIOLET).setOrigin(0, 0.5).setDepth(9);
+
+        this.addEnemy({
+            obj, flying: true,
+            hp: maxHp, maxHp, damage: INJECT_DAMAGE, bountyMult: INJECT_BOUNTY_MULT,
+            barBg, bar, barW: 32, shadow,
+            vx: INJECT_SPEED, vy: 0, turnAt: 0, alive: true
+        });
+
+        //  Wing-beat wobble. Flyers do not scuttle.
+        this.tweens.add({
+            targets: obj,
+            scaleY: INJECT_SCALE * 0.84,
+            duration: 220,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.InOut'
+        });
+
+        this.tweens.add({
+            targets: shadow,
+            scaleX: 0.75,
+            alpha: 0.18,
+            duration: 220,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.InOut'
+        });
+    }
+
+    //  Re-roll a flyer's heading: biased at the origin, but with enough random
+    //  spread that the actual route is never the same twice.
+    steer (enemy: Enemy)
+    {
+        const toOrigin = PhaserMath.Angle.Between(
+            enemy.obj.x, enemy.obj.y, ORIGIN_X, this.cy(ORIGIN_ROW)
+        );
+
+        const spread = PhaserMath.DegToRad(INJECT_SPREAD);
+        const angle = toOrigin + PhaserMath.FloatBetween(-spread, spread);
+
+        enemy.vx = Math.cos(angle) * INJECT_SPEED;
+        enemy.vy = Math.sin(angle) * INJECT_SPEED;
+        enemy.turnAt = this.time.now + PhaserMath.Between(INJECT_TURN_MIN, INJECT_TURN_MAX);
     }
 
     //  Enemy reached the origin server.
@@ -506,19 +688,23 @@ export class Game extends Scene
         if (!enemy.alive || this.over) return;
 
         const { x, y } = enemy.obj;
+        const damage = enemy.damage;
         this.killEnemy(enemy, false);
 
-        this.integrity = Math.max(0, this.integrity - DDOS_DAMAGE);
+        this.integrity = Math.max(0, this.integrity - damage);
         this.integrityText.setText(`INTEGRITY ${this.integrity}%`);
         this.integrityText.setColor(this.integrity <= 30 ? '#ef4444' : '#8ea3b8');
         this.integrityBar.width = this.integrity;
         this.integrityBar.setFillStyle(this.integrity <= 30 ? RED : this.integrity <= 60 ? ACCENT : GREEN);
 
-        this.cameras.main.shake(180, 0.006);
+        //  A flyer landing on the origin is a much bigger event than one more
+        //  packet in the flood.
+        const heavy = damage >= INJECT_DAMAGE;
+        this.cameras.main.shake(heavy ? 320 : 180, heavy ? 0.012 : 0.006);
         this.cameras.main.flash(120, 239, 68, 68);
 
         //  Floating damage readout.
-        const hit = this.add.text(x, y - 30, `-${DDOS_DAMAGE}% INTEGRITY`, {
+        const hit = this.add.text(x, y - 30, `-${damage}% INTEGRITY`, {
             fontFamily: 'Arial Black', fontSize: 13, color: '#ef4444'
         }).setOrigin(0.5).setDepth(9);
 
@@ -652,8 +838,8 @@ export class Game extends Scene
 
                 this.time.delayedCall(BROWNOUT_MS, () => {
                     t.offline = false;
-                    t.box.setStrokeStyle(2, ACCENT);
-                    t.label.setColor('#ff9900');
+                    t.box.setStrokeStyle(2, t.spec.colour);
+                    t.label.setColor(t.spec.hex);
                 });
             }
         });
@@ -681,23 +867,41 @@ export class Game extends Scene
     killEnemy (enemy: Enemy, reward: boolean)
     {
         enemy.alive = false;
-        enemy.obj.stopFollow();
+        enemy.follower?.stopFollow();
         this.tweens.killTweensOf(enemy.obj);
         enemy.obj.destroy();
         enemy.barBg.destroy();
         enemy.bar.destroy();
 
+        if (enemy.shadow)
+        {
+            this.tweens.killTweensOf(enemy.shadow);
+            enemy.shadow.destroy();
+        }
+
         if (!reward) return;
 
-        this.score += 10;
-        this.budget += this.bounty;
+        this.score += 10 * enemy.bountyMult;
+        this.budget += this.bounty * enemy.bountyMult;
         this.budgetText.setText(`$${this.budget}`);
     }
 
     fire (tower: Tower, target: Enemy)
     {
-        const bullet = this.add.circle(tower.x, tower.y, 2.5, ACCENT).setDepth(6);
-        this.bullets.push({ obj: bullet, target });
+        const spec = tower.spec;
+        const bullet = this.add.circle(tower.x, tower.y, spec.bulletRadius, spec.colour).setDepth(6);
+
+        //  The WAF slug is slow and fat, so give it a muzzle flash to read as a
+        //  heavy shot rather than a laggy one.
+        if (spec.kind === 'waf')
+        {
+            const flash = this.add.circle(tower.x, tower.y, 12, spec.colour, 0.5).setDepth(5);
+            this.tweens.add({
+                targets: flash, scale: 1.8, alpha: 0, duration: 180, onComplete: () => flash.destroy()
+            });
+        }
+
+        this.bullets.push({ obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed });
     }
 
     nearestEnemy (x: number, y: number, range: number): Enemy | null
@@ -726,7 +930,7 @@ export class Game extends Scene
         this.over = true;
         this.spawner.remove();
 
-        for (const e of this.enemies) if (e.alive) e.obj.pauseFollow();
+        for (const e of this.enemies) if (e.alive) e.follower?.pauseFollow();
 
         this.cameras.main.shake(400, 0.012);
         this.time.delayedCall(600, () => this.scene.start('GameOver', { score: this.score }));
@@ -736,20 +940,45 @@ export class Game extends Scene
     {
         if (this.over) return;
 
+        const dt = delta / 1000;
+
+        //  Flyers move themselves — no path, so this is their whole AI.
+        for (const e of this.enemies)
+        {
+            if (!e.alive || !e.flying) continue;
+
+            if (this.time.now >= e.turnAt) this.steer(e);
+
+            e.obj.x += e.vx * dt;
+            e.obj.y += e.vy * dt;
+
+            //  Keep them inside the data hall, bouncing off the floor edges.
+            if (e.obj.y < FLOOR_Y + 24) { e.obj.y = FLOOR_Y + 24; e.vy = Math.abs(e.vy); }
+            if (e.obj.y > 768 - 24) { e.obj.y = 768 - 24; e.vy = -Math.abs(e.vy); }
+            if (e.obj.x < 8 && e.vx < 0) { e.obj.x = 8; e.vx = Math.abs(e.vx); }
+
+            //  Art faces right, so heading maps straight onto rotation.
+            e.obj.rotation = Math.atan2(e.vy, e.vx);
+            e.shadow?.setPosition(e.obj.x, e.obj.y + 22);
+
+            if (e.obj.x >= ORIGIN_X - 56) this.breach(e);
+        }
+
         //  Health bars ride along above each enemy.
         for (const e of this.enemies)
         {
             if (!e.alive) continue;
 
-            e.barBg.setPosition(e.obj.x, e.obj.y - 18);
-            e.bar.setPosition(e.obj.x - 9, e.obj.y - 18);
-            e.bar.width = 18 * (e.hp / e.maxHp);
+            const by = e.obj.y - (e.flying ? 26 : 18);
+            e.barBg.setPosition(e.obj.x, by);
+            e.bar.setPosition(e.obj.x - e.barW / 2, by);
+            e.bar.width = e.barW * (e.hp / e.maxHp);
         }
 
         //  Towers acquire the closest target in range and shoot on cooldown.
         //  Cooldown is stretched by cooling loss and by any active latency spike.
         const spiking = this.time.now < this.spikeUntil;
-        const rate = SHIELD_RATE * this.fireRateMult * (spiking ? LATENCY_PENALTY : 1);
+        const penalty = this.fireRateMult * (spiking ? LATENCY_PENALTY : 1);
 
         for (const t of this.towers)
         {
@@ -758,16 +987,14 @@ export class Game extends Scene
             t.cooldown -= delta;
             if (t.cooldown > 0) continue;
 
-            const target = this.nearestEnemy(t.x, t.y, SHIELD_RANGE);
+            const target = this.nearestEnemy(t.x, t.y, t.spec.range);
             if (!target) continue;
 
-            t.cooldown = rate;
+            t.cooldown = t.spec.rate * penalty;
             this.fire(t, target);
         }
 
         //  Homing bullets.
-        const step = (BULLET_SPEED * delta) / 1000;
-
         for (const b of this.bullets)
         {
             if (!b.target.alive)
@@ -776,13 +1003,14 @@ export class Game extends Scene
                 continue;
             }
 
+            const step = b.speed * dt;
             const tx = b.target.obj.x;
             const ty = b.target.obj.y;
             const d = PhaserMath.Distance.Between(b.obj.x, b.obj.y, tx, ty);
 
             if (d <= step + 6)
             {
-                this.hit(b.target);
+                this.hit(b.target, b.damage);
                 b.obj.destroy();
                 continue;
             }
@@ -796,18 +1024,22 @@ export class Game extends Scene
         this.enemies = this.enemies.filter(e => e.alive);
     }
 
-    hit (enemy: Enemy)
+    hit (enemy: Enemy, damage: number)
     {
-        enemy.hp -= SHIELD_DAMAGE;
+        if (!enemy.alive) return;
+
+        enemy.hp -= damage;
 
         if (enemy.hp <= 0)
         {
             const { x, y } = enemy.obj;
+            const flying = enemy.flying;
             this.killEnemy(enemy, true);
 
-            const pop = this.add.circle(x, y, 6, ACCENT).setDepth(6);
+            const pop = this.add.circle(x, y, flying ? 12 : 6, flying ? VIOLET : ACCENT).setDepth(6);
             this.tweens.add({
-                targets: pop, scale: 3, alpha: 0, duration: 220, onComplete: () => pop.destroy()
+                targets: pop, scale: 3, alpha: 0, duration: flying ? 340 : 220,
+                onComplete: () => pop.destroy()
             });
             return;
         }
@@ -839,9 +1071,9 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 22, color: '#ff9900'
         }).setOrigin(1, 0).setDepth(10);
 
-        this.add.text(1014, 40, `SHIELD  $${SHIELD_COST}`, {
-            fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
-        }).setOrigin(1, 0).setDepth(10);
+        this.makePicker('shield', 728, '1');
+        this.makePicker('waf', 872, '2');
+        this.select('shield');
 
         this.waveText = this.add.text(512, 12, 'WAVE 1  ·  DDoS FLOOD', {
             fontFamily: 'Arial', fontSize: 16, color: '#8ea3b8'
@@ -851,7 +1083,7 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 14, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.add.text(512, 52, 'click a slot to build a SHIELD  ·  ESC menu', {
+        this.add.text(512, 52, 'pick a tower, click a slot to build  ·  ESC menu', {
             fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
 
@@ -862,5 +1094,29 @@ export class Game extends Scene
         this.latencyText = this.add.text(300, 40, `p99 ${BASE_LATENCY}ms`, {
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
+    }
+
+    //  One HUD build button. Clicking it, or pressing its number, arms that
+    //  tower for the next pad click.
+    makePicker (kind: TowerKind, x: number, key: string)
+    {
+        const spec = TOWER_SPECS[kind];
+
+        const box = this.add.rectangle(x, 32, 132, 40)
+            .setStrokeStyle(1, spec.colour, 0.35)
+            .setDepth(10)
+            .setInteractive({ useHandCursor: true });
+
+        const text = this.add.text(x, 25, `${key}  ${spec.name}  $${spec.cost}`, {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#5c728a'
+        }).setOrigin(0.5).setDepth(11);
+
+        this.add.text(x, 41, `${spec.damage} dmg  ·  ${(1000 / spec.rate).toFixed(1)}/s`, {
+            fontFamily: 'Arial', fontSize: 10, color: '#5c728a'
+        }).setOrigin(0.5).setDepth(11);
+
+        box.on('pointerdown', () => this.select(kind));
+
+        this.pickers[kind] = { box, text };
     }
 }

@@ -28,6 +28,9 @@ export class Preloader extends Scene
     {
         //  DDoS swarm tortoise. 64x64, drawn facing right.
         this.load.image('tortoise-ddos', 'assets/tortoise-ddos.png');
+
+        //  SQL injection tortoise — the flyer. 64x64, drawn facing right.
+        this.load.image('tortoise-injection', 'assets/tortoise-injection.png');
     }
 
     create ()

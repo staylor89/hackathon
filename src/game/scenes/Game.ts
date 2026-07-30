@@ -319,7 +319,7 @@ const OFFLINE = 0x475569;
 
 //  Second HUD line. The hall you are looking at is prepended, and the line is
 //  rewritten on mute and on every region switch.
-const HINT = 'CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  TAB REGION  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
+const HINT = 'CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  1-4 / TAB REGION  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
 const HINT_W = 500;          // fitText() budget — it must not reach the build buttons
 
 //  ── Music ────────────────────────────────────────────────────────────────
@@ -634,12 +634,15 @@ export class Game extends Scene
             this.scene.start('MainMenu');
         });
 
-        this.input.keyboard?.on('keydown-ONE', () => this.pick('iam'));
-        this.input.keyboard?.on('keydown-TWO', () => this.pick('shield'));
-        this.input.keyboard?.on('keydown-THREE', () => this.pick('waf'));
-        this.input.keyboard?.on('keydown-FOUR', () => this.pick('snowmobile'));
+        //  1-4 jump straight to a region, in tab-strip order. Towers are
+        //  clicked, not keyed: mid-game the hands-on-keyboard action is
+        //  hopping between regions, not re-arming the build cursor.
+        this.input.keyboard?.on('keydown-ONE', () => this.jumpRegion(0));
+        this.input.keyboard?.on('keydown-TWO', () => this.jumpRegion(1));
+        this.input.keyboard?.on('keydown-THREE', () => this.jumpRegion(2));
+        this.input.keyboard?.on('keydown-FOUR', () => this.jumpRegion(3));
 
-        //  TAB cycles halls. Captured, or the browser moves focus off the canvas.
+        //  TAB cycles regions. Captured, or the browser moves focus off the canvas.
         this.input.keyboard?.addCapture('TAB');
         this.input.keyboard?.on('keydown-TAB', () => this.cycleRegion());
 
@@ -738,6 +741,15 @@ export class Game extends Scene
 
         this.sfx('sfx-ui-click', { volume: 0.7 });
         this.showRegion((this.active + 1) % this.regions.length);
+    }
+
+    //  Number keys. Silently ignores regions that are not provisioned yet.
+    jumpRegion (index: number)
+    {
+        if (this.over || index >= this.regions.length || index === this.active) return;
+
+        this.sfx('sfx-ui-click', { volume: 0.7 });
+        this.showRegion(index);
     }
 
     //  A new hall comes online. Only ever called during the quiet gap after a
@@ -1203,8 +1215,8 @@ export class Game extends Scene
         });
     }
 
-    //  Clicking a HUD button (or pressing its number) buys the tower if it is
-    //  still locked, otherwise just arms it. Unlocks apply to every hall.
+    //  Clicking a HUD button buys the tower if it is still locked, otherwise
+    //  just arms it. Unlocks apply to every region.
     pick (kind: TowerKind)
     {
         if (this.over) return;
@@ -2398,10 +2410,10 @@ export class Game extends Scene
         //  most of it — everything else is packed into three short rows on the
         //  left and fitText()'d so nothing can grow into the buttons. The region
         //  tabs sit in the strip above them; see makeTab().
-        this.makePicker('iam', 591, '1');
-        this.makePicker('shield', 711, '2');
-        this.makePicker('waf', 831, '3');
-        this.makePicker('snowmobile', 951, '4');
+        this.makePicker('iam', 591);
+        this.makePicker('shield', 711);
+        this.makePicker('waf', 831);
+        this.makePicker('snowmobile', 951);
         this.refreshPickers();
 
         this.statusText = this.add.text(182, 2, 'HEALTHY', {
@@ -2547,9 +2559,9 @@ export class Game extends Scene
         }
     }
 
-    //  One HUD build button. Clicking it, or pressing its number, buys the
-    //  tower if locked and otherwise arms it for the next pad click.
-    makePicker (kind: TowerKind, x: number, key: string)
+    //  One HUD build button. Clicking it buys the tower if locked and
+    //  otherwise arms it for the next pad click.
+    makePicker (kind: TowerKind, x: number)
     {
         const spec = TOWER_SPECS[kind];
 
@@ -2563,7 +2575,7 @@ export class Game extends Scene
 
         //  Text sits in the 80px right of the icon. SNOWMOBILE is wider than
         //  that, so both lines are fitted rather than trusted to fit.
-        const text = this.add.text(x + 14, 31, `${key}  ${spec.name}`, {
+        const text = this.add.text(x + 14, 31, spec.name, {
             fontFamily: 'Arial Black', fontSize: 10, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
 

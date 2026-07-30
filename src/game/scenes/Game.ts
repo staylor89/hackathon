@@ -89,7 +89,12 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     },
     waf: {
         kind: 'waf', texture: 'tower-waf', name: 'WAF',
-        unlock: 350, cost: 200, range: 155, rate: 850, damage: 30,
+        //  Unlock came down from 350 once WAF became the only counter to flyers:
+        //  a mandatory tower cannot also be a luxury purchase. Range went up
+        //  from 155 because the binding constraint against a crossing flyer is
+        //  how long it stays in the circle, not damage per shot — and range buys
+        //  that without raising DPS against the trench.
+        unlock: 250, cost: 200, range: 170, rate: 850, damage: 30,
         //  The only tower that can touch a flyer. Inspecting request payloads is
         //  the one thing in the roster that does not care what carried them.
         bulletSpeed: 620, shot: 'shot-waf', shotFacing: true, seesCloaked: false, hitsFlying: true,
@@ -165,16 +170,30 @@ const DDOS_SCALE = 0.34;      // tortoise-ddos.png is 64x64 → ~22px on screen
 const DDOS_BOUNTY = 8;
 
 //  SQL injection: airborne, so it ignores the cable trench entirely and
-//  wanders straight at the origin. Fat HP pool, hurts a lot on arrival.
+//  wanders straight at the origin. Fragile but urgent, and expensive if it
+//  lands.
+//
+//  HP is deliberately low for its arrival wave. It used to be a 90 HP pool
+//  tuned for a world where all four towers could shoot it; now only WAF can, so
+//  the nerf lands here rather than as a WAF damage buff. Buffing WAF would have
+//  raised its DPS against the trench too, and WAF is not supposed to be the
+//  answer to shinobi.
 const INJECT_SPEED = 100;     // px/sec through the air
-const INJECT_HP = 90;         // +18 per wave
+const INJECT_HP = 45;
+const INJECT_HP_GROWTH = 8;   // per wave after the first
 const INJECT_DAMAGE = 9;
 const INJECT_SCALE = 0.52;
 const INJECT_BOUNTY_MULT = 4; // paid as bounty x this
 const INJECT_SPREAD = 78;     // degrees of random heading either side of "toward origin"
 const INJECT_TURN_MIN = 220;  // ms before it picks a new heading
 const INJECT_TURN_MAX = 640;
-const INJECT_FIRST_WAVE = 3;  // flyers join in wave 3
+
+//  Flyers wait until wave 6, and the constraint is the economy rather than the
+//  difficulty curve: with a realistic spend on ground defence the player cannot
+//  field a WAF (unlock + build) until about here, and WAF is now the only answer
+//  to a flyer. Wave 6 also sits clear of the wave-5 boss, so the two
+//  introductions do not collide.
+const INJECT_FIRST_WAVE = 6;
 const INJECT_SPACING = 2200;  // ms between flyers inside a wave
 
 //  Leatherback tank: the boss. Crawls, soaks an enormous amount of damage, and
@@ -1699,7 +1718,7 @@ export class Game extends Scene
     {
         if (this.over) return;
 
-        const maxHp = INJECT_HP + (this.wave - 1) * 18;
+        const maxHp = INJECT_HP + (this.wave - 1) * INJECT_HP_GROWTH;
         const y = PhaserMath.Between(FLOOR_Y + 60, 768 - 60);
 
         const obj = this.add.sprite(-40, y, 'tortoise-injection')

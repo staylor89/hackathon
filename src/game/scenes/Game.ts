@@ -152,7 +152,7 @@ const NINJA_SPEED = 88;       // px/sec along the trench
 const NINJA_HP = 26;          // +7 per wave
 const NINJA_DAMAGE = 4;
 const NINJA_SCALE = 0.72;     // README asks for ~48px on screen
-const NINJA_BOUNTY_MULT = 2;
+const NINJA_BOUNTY = 10;      // $ per kill — the baseline mob
 const NINJA_CLOAK_EVERY = 2400;   // ms between dashes
 const NINJA_CLOAK_MS = 700;       // how long each dash lasts
 const NINJA_DASH_MULT = 2.4;      // path speed multiplier while dashing
@@ -167,7 +167,7 @@ const DDOS_SPEED = 115;       // px/sec along the trench
 const DDOS_HP = 12;           // +3 per wave
 const DDOS_DAMAGE = 3;        // integrity lost if it reaches the origin
 const DDOS_SCALE = 0.34;      // tortoise-ddos.png is 64x64 → ~22px on screen
-const DDOS_BOUNTY = 8;
+const DDOS_BOUNTY = 15;      // $ per kill
 
 //  SQL injection: airborne, so it ignores the cable trench entirely and
 //  wanders straight at the origin. Fragile but urgent, and expensive if it
@@ -183,7 +183,7 @@ const INJECT_HP = 45;
 const INJECT_HP_GROWTH = 8;   // per wave after the first
 const INJECT_DAMAGE = 9;
 const INJECT_SCALE = 0.52;
-const INJECT_BOUNTY_MULT = 4; // paid as bounty x this
+const INJECT_BOUNTY = 30;     // $ per kill
 const INJECT_SPREAD = 78;     // degrees of random heading either side of "toward origin"
 const INJECT_TURN_MIN = 220;  // ms before it picks a new heading
 const INJECT_TURN_MAX = 640;
@@ -203,7 +203,7 @@ const TANK_SPEED = 30;        // px/sec — a crawl; nearly a minute end to end
 const TANK_HP = 420;          // +140 per wave
 const TANK_DAMAGE = 25;       // integrity lost if it reaches the origin
 const TANK_SCALE = 0.84;      // 96x96 art → ~80px on screen, per the README
-const TANK_BOUNTY_MULT = 12;
+const TANK_BOUNTY = 75;       // $ per kill
 const TANK_SPACING = 3200;    // ms between tanks once there is more than one
 
 const DDOS_FIRST_WAVE = 2;    // the flood joins in wave 2
@@ -382,7 +382,7 @@ interface Enemy {
     hp: number;
     maxHp: number;
     damage: number;                        // integrity cost of a breach
-    bountyMult: number;
+    bounty: number;                        // dollars paid when killed
     barBg: GameObjects.Rectangle;
     bar: GameObjects.Rectangle;
     barW: number;
@@ -450,7 +450,7 @@ export class Game extends Scene
     over = false;
 
     //  Degradation state — all of this worsens as the origin takes damage.
-    bounty = DDOS_BOUNTY;
+    billing = 1;              // multiplier on every payout, cut by a tier
     fireRateMult = 1;         // >1 means slower shots
     waveGap = WAVE_GAP;
     spikeMs = SPIKE_MS;
@@ -648,7 +648,7 @@ export class Game extends Scene
         this.regions = [];
         this.active = 0;
         this.provisionAt = 0;
-        this.bounty = DDOS_BOUNTY;
+        this.billing = 1;
         this.fireRateMult = 1;
         this.waveGap = WAVE_GAP;
         this.spikeMs = SPIKE_MS;
@@ -1554,7 +1554,7 @@ export class Game extends Scene
         const enemy = this.addEnemy(region, {
             region,
             obj, follower: obj, flying: false, boss: false,
-            hp: maxHp, maxHp, damage: NINJA_DAMAGE, bountyMult: NINJA_BOUNTY_MULT,
+            hp: maxHp, maxHp, damage: NINJA_DAMAGE, bounty: NINJA_BOUNTY,
             barBg, bar, barW: 28, barOffset: 30,
             vx: 0, vy: 0, turnAt: 0,
             cloaked: false,
@@ -1590,7 +1590,7 @@ export class Game extends Scene
         const enemy = this.addEnemy(region, {
             region,
             obj, follower: obj, flying: false, boss: true,
-            hp: maxHp, maxHp, damage: TANK_DAMAGE, bountyMult: TANK_BOUNTY_MULT,
+            hp: maxHp, maxHp, damage: TANK_DAMAGE, bounty: TANK_BOUNTY,
             barBg, bar, barW: 54, barOffset: 48,
             vx: 0, vy: 0, turnAt: 0,
             cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
@@ -1686,7 +1686,7 @@ export class Game extends Scene
         const enemy = this.addEnemy(region, {
             region,
             obj, follower: obj, flying: false, boss: false,
-            hp: maxHp, maxHp, damage: DDOS_DAMAGE, bountyMult: 1,
+            hp: maxHp, maxHp, damage: DDOS_DAMAGE, bounty: DDOS_BOUNTY,
             barBg, bar, barW: 18, barOffset: 18,
             vx: 0, vy: 0, turnAt: 0,
             cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
@@ -1733,7 +1733,7 @@ export class Game extends Scene
         this.addEnemy(region, {
             region,
             obj, flying: true, boss: false,
-            hp: maxHp, maxHp, damage: INJECT_DAMAGE, bountyMult: INJECT_BOUNTY_MULT,
+            hp: maxHp, maxHp, damage: INJECT_DAMAGE, bounty: INJECT_BOUNTY,
             barBg, bar, barW: 32, barOffset: 28, shadow,
             vx: INJECT_SPEED, vy: 0, turnAt: 0,
             cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
@@ -1898,7 +1898,7 @@ export class Game extends Scene
         const tiers: { at: number, run: () => void }[] = [
             { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
             { at: 80, run: () => this.killPowerDomain(0) },
-            { at: 70, run: () => { this.bounty = 6; this.flashHud('BILLING THROTTLED  ·  BOUNTY $6'); } },
+            { at: 70, run: () => { this.billing = 0.6; this.flashHud('BILLING THROTTLED  ·  BOUNTY -40%'); } },
             { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(7500); } },
             { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
             { at: 40, run: () => { this.killPowerDomain(1); this.spikeMs = 4000; } },
@@ -2043,8 +2043,9 @@ export class Game extends Scene
 
         if (!reward) return;
 
-        this.score += 10 * enemy.bountyMult;
-        this.budget += this.bounty * enemy.bountyMult;
+        //  Every kill is worth the same 10 score; the money depends on the mob.
+        this.score += 10;
+        this.budget += Math.round(enemy.bounty * this.billing);
         this.budgetText.setText(`$${this.budget}`);
     }
 
@@ -2274,7 +2275,7 @@ export class Game extends Scene
         }
 
         this.cameras.main.shake(400, 0.012);
-        this.time.delayedCall(600, () => this.scene.start('GameOver', { score: this.score }));
+        this.time.delayedCall(600, () => this.scene.start('GameOver', { score: this.score, wave: this.wave }));
     }
 
     update (_time: number, delta: number)
@@ -2476,7 +2477,7 @@ export class Game extends Scene
             if (boss)
             {
                 this.cameras.main.shake(260, 0.008);
-                this.flashHud(`LEATHERBACK DOWN  ·  +$${this.bounty * TANK_BOUNTY_MULT}`, '#22c55e');
+                this.flashHud(`LEATHERBACK DOWN  ·  +$${Math.round(TANK_BOUNTY * this.billing)}`, '#22c55e');
             }
             return;
         }

@@ -35,7 +35,7 @@ export class Preloader extends Scene
         //  SQL injection tortoise — the flyer. 64x64, drawn facing right.
         this.load.image('tortoise-injection', 'assets/tortoise-injection.png');
 
-        //  Leatherback tank — the boss. 96x96, not 64.
+        //  Enterprise Customer tank — the boss. 96x96, not 64.
         this.load.image('tortoise-tank', 'assets/tortoise-tank.png');
 
         //  Towers. 64x64 top-down emplacements, drawn on a 50x50 baseplate, so

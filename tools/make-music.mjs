@@ -278,7 +278,7 @@ function core ()
 //  half-time, sixteenth bass instead of offbeat plucks, and a Bb sitting a
 //  semitone above the A root to do the actual menacing.
 //
-//  It runs 8 bars rather than 4 because a leatherback crawls for nearly a
+//  It runs 8 bars rather than 4 because an enterprise customer crawls for nearly a
 //  minute; a 4-bar loop went round six times per boss and the repetition read as
 //  cheap rather than as tense. The extra length buys an arc:
 //

@@ -114,7 +114,7 @@ Palette:
 | Limbs   | #c95ae0 |
 | Outline | #2b0a2e |
 
-## Leatherback tank
+## Enterprise Customer tank
 
 Slow and very tanky. Leathery carapace with no scutes: seven longitudinal keels
 converging on a pointed tail, pale speckles across the hide, huge front

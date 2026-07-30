@@ -296,7 +296,7 @@ const SOUNDS = {
         });
     } },
 
-    //  Leatherback down. The best thing that happens in a run, so it gets the
+    //  Enterprise Customer down. The best thing that happens in a run, so it gets the
     //  longest tail of any kill sound.
     'boss-death': { db: -11, brief: 'Boss killed. Shell collapse into a low boom.', make: () =>
     {

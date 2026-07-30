@@ -219,7 +219,7 @@ const INJECT_TURN_MAX = 640;
 //  table needs it.
 const INJECT_SPACING = 2200;  // ms between flyers inside a wave
 
-//  Leatherback tank: the boss. Crawls, soaks an enormous amount of damage, and
+//  Enterprise Customer tank: the boss. Crawls, soaks an enormous amount of damage, and
 //  takes a quarter of the origin with it if it lands. Every fifth wave only.
 const TANK_EVERY = 5;         // boss wave cadence
 const TANK_SPEED = 30;        // px/sec — a crawl; nearly a minute end to end
@@ -624,7 +624,7 @@ export class Game extends Scene
         this.music = incoming;
     }
 
-    //  Boss music holds for as long as a leatherback is on the board anywhere,
+    //  Boss music holds for as long as an enterprise customer is on the board anywhere,
     //  which outlasts its own wave — a tank crawls for nearly a minute and the
     //  wave gap is ten seconds, so the next wave routinely starts while it is
     //  still inbound. A tank in a hall you are not watching still counts.
@@ -1506,7 +1506,7 @@ export class Game extends Scene
             //  refreshMusic() would put the bed back on.
             this.playMusic('music-boss', 600);
             this.sfx('sfx-wave-boss');
-            this.flashHud(`BOSS WAVE  ·  LEATHERBACK  ·  -${TANK_DAMAGE}% IF IT LANDS`);
+            this.flashHud(`BOSS WAVE  ·  ENTERPRISE CUSTOMER  ·  -${TANK_DAMAGE}% IF IT LANDS`);
             this.cameras.main.shake(500, 0.004);
         }
         else
@@ -2627,7 +2627,7 @@ export class Game extends Scene
             if (boss)
             {
                 this.cameras.main.shake(260, 0.008);
-                this.flashHud(`LEATHERBACK DOWN  ·  +$${Math.round(TANK_BOUNTY * this.billing)}`, '#22c55e');
+                this.flashHud(`ENTERPRISE CUSTOMER DOWN  ·  +$${Math.round(TANK_BOUNTY * this.billing)}`, '#22c55e');
             }
             return;
         }

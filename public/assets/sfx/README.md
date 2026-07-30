@@ -69,7 +69,7 @@ satisfies that, so no manual unlock handling is needed.
 | `sfx-tower-offline` | `tower-offline.wav` | 520ms | -14 dBFS | Brownout. Power-down glide with 60 Hz mains hum |
 | `sfx-enemy-hit` | `enemy-hit.wav` | 38ms | -23 dBFS | Non-fatal hit. The most frequent event in the game; hardest throttled |
 | `sfx-enemy-death` | `enemy-death.wav` | 210ms | -16 dBFS | Mob killed. Noise collapsing 5200 to 420 Hz plus a body thump |
-| `sfx-boss-death` | `boss-death.wav` | 760ms | -11 dBFS | Leatherback down. Shell collapse into a low boom |
+| `sfx-boss-death` | `boss-death.wav` | 760ms | -11 dBFS | Enterprise Customer down. Shell collapse into a low boom |
 | `sfx-ninja-dash` | `ninja-dash.wav` | 190ms | -22 dBFS | Both ends of a shinobi smoke dash |
 | `sfx-breach` | `turtle-mating-short.wav` | 340ms | -14 dBFS | Flood or shinobi reaches the origin. **Sourced clip** |
 | `sfx-breach-heavy` | `turtle-mating.wav` | 936ms | -9 dBFS | Flyer or tank lands. **Sourced clip**, full length |
@@ -144,7 +144,7 @@ bars rather than the four it started with:
     bar  7     the Bb, now with a tritone in the stab
     bar  8     accelerating timpani roll and a swell into the crash
 
-The length matters more than it looks. A leatherback crawls for nearly a minute,
+The length matters more than it looks. An enterprise customer crawls for nearly a minute,
 so the original 4-bar loop went round six times per boss and the repetition read
 as cheap rather than as tense. Per-bar intensity is a multiplier over one set of
 patterns (`PUSH` in `boss()`) rather than a second set, so the two halves cannot
@@ -168,7 +168,7 @@ downbeat is there to cover that drop, and the measurement confirms it does.
 playing. Boss music starts on the **wave announcement** rather than on the first
 tank spawn, because the spawn is still on a timer at that point. It then holds
 for as long as any boss is alive, which routinely outlasts its own wave: a
-leatherback crawls for nearly a minute and the wave gap is ten seconds, so the
+enterprise customer crawls for nearly a minute and the wave gap is ten seconds, so the
 next wave usually starts while the boss is still inbound. `refreshMusic()` is
 what returns to the bed, called from `killEnemy` so it covers a boss both dying
 and reaching the origin.

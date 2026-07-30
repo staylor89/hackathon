@@ -248,18 +248,9 @@ const TAB_W = 84;
 const TAB_H = 16;
 const TAB_GAP = 4;
 
-//  A power domain is a 4x3 block of tiles that goes dark as integrity drops.
-const PWR_W = 4;
-const PWR_H = 3;
-const PWR_NAMES = ['PWR-A', 'PWR-B'];
-
-interface RackDecor {
-    col: number;
-    row: number;
-    w: number;                // px, not tiles — racks are 48px deep in a 64px row
-    h: number;
-    label: string;
-}
+//  One feed per availability zone. Only the first two are tripped by the
+//  integrity tiers, so a hall always keeps one zone on mains power.
+const PWR_NAMES = ['PWR-A', 'PWR-B', 'PWR-C'];
 
 //  Everything that makes one hall's floor plan. Halls differ only in here, so
 //  a new layout is a data change and never a code change.
@@ -271,12 +262,6 @@ interface Layout {
     waypoints: [number, number][];
     originRow: number;
     ingressRow: number;
-    //  Cells taken up by decorative hardware — never buildable. The origin
-    //  rack's own cells are derived from originRow, not listed here.
-    rackCells: [number, number][];
-    decor: RackDecor[];
-    //  Top-left corner of each power domain, in the order they fail.
-    power: [number, number][];
 }
 
 const HALL_A: Layout = {
@@ -284,16 +269,7 @@ const HALL_A: Layout = {
         [-1, 1], [4, 1], [4, 4], [1, 4], [1, 8], [6, 8], [6, 3], [10, 3], [10, 7], [13, 7]
     ],
     originRow: 7,
-    ingressRow: 1,
-    rackCells: [
-        [12, 0], [13, 0], [14, 0], [15, 0],
-        [8, 10], [9, 10], [10, 10], [11, 10], [12, 10]
-    ],
-    decor: [
-        { col: 12, row: 0, w: 248, h: 48, label: 'RACK A1-A4' },
-        { col: 8, row: 10, w: 312, h: 48, label: 'RACK B1-B5' }
-    ],
-    power: [[12, 0], [0, 8]]
+    ingressRow: 1
 };
 
 //  Second floor plan. Same 16x11 grid, a route of comparable length (38 tiles
@@ -304,16 +280,7 @@ const HALL_C: Layout = {
         [-1, 4], [2, 4], [2, 1], [5, 1], [5, 6], [2, 6], [2, 9], [8, 9], [8, 4], [11, 4], [11, 2], [13, 2]
     ],
     originRow: 2,
-    ingressRow: 4,
-    rackCells: [
-        [9, 10], [10, 10], [11, 10], [12, 10], [13, 10],
-        [0, 0], [1, 0]
-    ],
-    decor: [
-        { col: 9, row: 10, w: 312, h: 48, label: 'RACK C1-C5' },
-        { col: 0, row: 0, w: 120, h: 48, label: 'RACK C6-C7' }
-    ],
-    power: [[0, 7], [12, 4]]
+    ingressRow: 4
 };
 
 //  Mirror a hall top to bottom. Path length, tile count and the number of pads
@@ -322,10 +289,7 @@ const HALL_C: Layout = {
 const flipRows = (l: Layout): Layout => ({
     waypoints: l.waypoints.map(([c, r]) => [c, ROWS - 1 - r] as [number, number]),
     originRow: ROWS - 1 - l.originRow,
-    ingressRow: ROWS - 1 - l.ingressRow,
-    rackCells: l.rackCells.map(([c, r]) => [c, ROWS - 1 - r] as [number, number]),
-    decor: l.decor.map(d => ({ ...d, row: ROWS - 1 - d.row })),
-    power: l.power.map(([c, r]) => [c, ROWS - PWR_H - r] as [number, number])
+    ingressRow: ROWS - 1 - l.ingressRow
 });
 
 //  Hall n uses LAYOUTS[n]. Two plans and their mirrors, so the first four halls
@@ -359,6 +323,21 @@ const SPIKE_MS = 1500;        // how long a spike lasts, grows with damage
 const BROWNOUT_EVERY = 4000;  // ms between brownouts once they start
 const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
 const OFFLINE = 0x475569;
+
+//  Every hall is divided into three availability zones: full-height bands of
+//  columns, drawn on the board so the player can see them before building. An
+//  AZ is the smallest thing AWS gives its own power and cooling, so a power
+//  domain failing takes its whole zone's towers with it rather than one tower.
+//
+//  Inclusive column ranges, and they must tile 0..COLS-1 with no gap and no
+//  overlap: every build slot has to land in exactly one zone.
+const AZ_BANDS: [number, number][] = [[0, 5], [6, 10], [11, 15]];
+const AZ_SLOW = 1.8;          // cooldown multiplier for towers in a dark zone
+const AZ_DARK = 0xd08a8a;     // tint for a tower that still fires, just slower
+const AZ_LINE = 0x2f4a63;     // zone box, healthy
+const AZ_LINE_DARK = 0xef4444;
+const AZ_TAG = '#e6edf3';     // zone label, healthy
+const AZ_TAG_DARK = '#ff6b6b';
 
 //  Second HUD line. The hall you are looking at is prepended, and the line is
 //  rewritten on mute and on every region switch.
@@ -397,8 +376,21 @@ interface Enemy {
     alive: boolean;
 }
 
+//  One of the three power feeds in a hall, covering a band of columns. Which
+//  zone a slot sits in is a property of the board, fixed when the hall is
+//  drawn: it does not depend on what the player builds, or when.
+interface Az {
+    name: string;
+    from: number;                       // first column, inclusive
+    to: number;                         // last column, inclusive
+    dark: boolean;                      // its power domain has failed
+    box: GameObjects.Rectangle;         // outline drawn on the board
+    label: GameObjects.Text;
+}
+
 interface Tower {
     region: Region;
+    az: Az;
     x: number;
     y: number;
     spec: TowerSpec;
@@ -428,6 +420,7 @@ interface Region {
     layer: GameObjects.Layer;
     route: Phaser.Curves.Path;
     towers: Tower[];
+    azs: Az[];
     enemies: Enemy[];
     bullets: Bullet[];
     pads: GameObjects.Rectangle[];
@@ -737,24 +730,30 @@ export class Game extends Scene
         const route = this.drawRoute(layer, layout);
         this.drawIngress(layer, layout);
         const integrityBar = this.drawOrigin(layer, layout);
-        this.drawDecor(layer, layout);
 
         const region: Region = {
             index,
             name: REGION_NAMES[index % REGION_NAMES.length],
             layout, layer, route, integrityBar,
-            towers: [], enemies: [], bullets: [], pads: [],
+            towers: [], azs: [], enemies: [], bullets: [], pads: [],
             alertUntil: 0,
             tab: null as unknown as Region['tab']
         };
 
         this.regions.push(region);
+
+        //  Zones before pads: both sit at depth 0, so the boxes have to go into
+        //  the layer first to end up underneath the slots they contain.
+        this.drawAzs(region);
         this.drawPads(region);
         this.makeTab(region);
 
         //  A hall provisioned at 40% integrity opens already degraded: the
         //  damage is to the shared origin, not to the room it arrived in.
-        for (const slot of this.powerLost) this.shroudPower(region, slot);
+        for (const slot of this.powerLost)
+        {
+            this.darkenAz(region, this.azForDomain(region, slot));
+        }
 
         return region;
     }
@@ -1037,53 +1036,6 @@ export class Game extends Scene
         return bar;
     }
 
-    //  Cold-aisle racks and cooling plant. Pure decoration.
-    drawDecor (layer: GameObjects.Layer, layout: Layout)
-    {
-        const g = this.add.graphics();
-        layer.add(g);
-
-        const leds: GameObjects.Rectangle[] = [];
-
-        for (const spec of layout.decor)
-        {
-            const x = spec.col * TILE + 4;
-            const y = FLOOR_Y + spec.row * TILE + 8;
-
-            g.fillStyle(RACK, 1);
-            g.fillRect(x, y, spec.w, spec.h);
-            g.lineStyle(1, RACK_LIP, 1);
-            g.strokeRect(x, y, spec.w, spec.h);
-
-            for (let uy = y + 8; uy < y + spec.h - 6; uy += 12)
-            {
-                g.lineStyle(1, RACK_LIP, 0.6);
-                g.lineBetween(x + 6, uy, x + spec.w - 6, uy);
-                leds.push(this.add.rectangle(x + spec.w - 12, uy, 4, 4, (uy % 24 === 0) ? CYAN : GREEN));
-            }
-
-            //  Row 0 has nothing above it to label into, so that one sits just
-            //  inside the tile instead.
-            const labelY = spec.row === 0 ? FLOOR_Y + 2 : FLOOR_Y + spec.row * TILE - 12;
-
-            layer.add(this.add.text(spec.col * TILE + 6, labelY, spec.label, {
-                fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
-            }));
-        }
-
-        layer.add(leds);
-
-        this.tweens.add({
-            targets: leds,
-            alpha: 0.15,
-            duration: 900,
-            yoyo: true,
-            repeat: -1,
-            delay: this.tweens.stagger(90),
-            ease: 'Sine.InOut'
-        });
-    }
-
     //  Buildable slots = free tiles that touch the cable trench.
     drawPads (region: Region)
     {
@@ -1108,9 +1060,7 @@ export class Game extends Scene
             }
         }
 
-        for (const [c, r] of layout.rackCells) occupied.add(`${c},${r}`);
-
-        //  The origin rack itself, derived from the row it sits on so a mirrored
+        //  The origin server, derived from the row it sits on so a mirrored
         //  layout can't forget to move it.
         for (let r = layout.originRow - 1; r <= layout.originRow + 1; r++)
         {
@@ -1127,14 +1077,60 @@ export class Game extends Scene
                 const touchesPath = onPath.has(`${col - 1},${row}`) || onPath.has(`${col + 1},${row}`)
                     || onPath.has(`${col},${row - 1}`) || onPath.has(`${col},${row + 1}`);
 
-                if (touchesPath) this.makePad(region, col, row);
+                if (touchesPath) this.makePad(region, col, row, this.azAt(region, col));
             }
         }
     }
 
+    //  The three zone boxes. Drawn as outlines with no fill so the floor, the
+    //  trench and the pads all still read through them.
+    drawAzs (region: Region)
+    {
+        AZ_BANDS.forEach(([from, to], i) => {
+            const x = from * TILE;
+            const w = (to - from + 1) * TILE;
+            const h = ROWS * TILE;
+
+            const box = this.add.rectangle(x, FLOOR_Y, w, h)
+                .setOrigin(0, 0)
+                .setStrokeStyle(2, AZ_LINE, 0.85);
+
+            const label = this.add.text(x + 6, FLOOR_Y + 4, `AZ-${String.fromCharCode(65 + i)}`, {
+                fontFamily: 'Arial Black', fontSize: 11, color: AZ_TAG,
+                backgroundColor: 'rgba(11, 17, 32, 0.88)', padding: { x: 4, y: 1 }
+            });
+
+            region.layer.add([box, label]);
+
+            region.azs.push({
+                name: `AZ-${String.fromCharCode(65 + i)}`,
+                from, to, dark: false, box, label
+            });
+        });
+    }
+
+    //  Which zone owns a column. AZ_BANDS tiles the whole grid, so the fallback
+    //  only fires if that invariant is ever broken.
+    azAt (region: Region, col: number): Az
+    {
+        for (const az of region.azs)
+        {
+            if (col >= az.from && col <= az.to) return az;
+        }
+
+        return region.azs[region.azs.length - 1];
+    }
+
+    //  One feed per zone, in order: PWR_NAMES[n] powers region.azs[n]. The two
+    //  lists are the same length by construction, so a slot always resolves.
+    azForDomain (region: Region, slot: number): Az
+    {
+        return region.azs[slot];
+    }
+
     //  One buildable slot: hover tints it in the armed tower's colour, click
     //  builds it.
-    makePad (region: Region, col: number, row: number)
+    makePad (region: Region, col: number, row: number, az: Az)
     {
         const x = this.cx(col);
         const y = this.cy(row);
@@ -1146,6 +1142,9 @@ export class Game extends Scene
         //  showRegion() re-arms every free pad in the hall it switches to, and
         //  this is how it knows which ones are free.
         pad.setData('free', true);
+
+        //  The slot owns its zone; whatever gets built here inherits it.
+        pad.setData('az', az);
 
         region.layer.add(pad);
         region.pads.push(pad);
@@ -1202,8 +1201,13 @@ export class Game extends Scene
 
         this.sfx('sfx-tower-build');
 
+        //  The slot decides the zone, so the same pad always yields the same
+        //  feed no matter what is built on it or in what order.
+        const az = pad.getData('az') as Az;
+
         const tower: Tower = {
-            region, x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad
+            region, az, x, y, spec, cooldown: 0, offline: false, sold: false,
+            sprite, pad
         };
 
         //  Hovering a built tower shows what it sells for.
@@ -1233,15 +1237,19 @@ export class Game extends Scene
         });
 
         region.towers.push(tower);
+        this.paintTower(tower);
     }
 
-    //  Restore a tower's resting look: dark while browned out, plain otherwise.
+    //  Restore a tower's resting look. Three states, most severe first: browned
+    //  out entirely, powered by a dark zone, or healthy.
     paintTower (tower: Tower)
     {
         if (tower.sold) return;
 
         if (tower.offline) tower.sprite.setTint(OFFLINE);
+        else if (tower.az.dark) tower.sprite.setTint(AZ_DARK);
         else tower.sprite.clearTint();
+
     }
 
     //  Refund half the build cost and re-arm the pad underneath.
@@ -1932,28 +1940,32 @@ export class Game extends Scene
     {
         this.powerLost.push(slot);
 
-        for (const region of this.regions) this.shroudPower(region, slot);
+        for (const region of this.regions)
+        {
+            //  Which zone goes with it depends on where that hall's rack sits,
+            //  so the same domain can take AZ-C in one hall and AZ-A in another.
+            this.darkenAz(region, this.azForDomain(region, slot));
+        }
+
+        const az = this.azForDomain(this.current(), slot);
+
+        this.flashHud(`${PWR_NAMES[slot]} OFFLINE  ·  ${az.name} TOWERS SLOWED`);
     }
 
-    //  Dimmed tiles and an offline label over one hall's power domain.
-    shroudPower (region: Region, slot: number)
+    //  A zone loses its feed. Its towers keep firing and keep their range, they
+    //  just reload AZ_SLOW times slower — see the tower loop in update().
+    darkenAz (region: Region, az: Az)
     {
-        const [col, row] = region.layout.power[slot];
-        const x = col * TILE;
-        const y = FLOOR_Y + row * TILE;
+        az.dark = true;
 
-        const shroud = this.add.rectangle(x, y, PWR_W * TILE, PWR_H * TILE, 0x000000, 0)
-            .setOrigin(0, 0)
-            .setDepth(3);
+        az.box.setStrokeStyle(2, AZ_LINE_DARK, 0.9);
+        az.label.setColor(AZ_TAG_DARK);
+        az.label.setText(`${az.name}  OFFLINE`);
 
-        const label = this.add.text(x + PWR_W * TILE / 2, y + PWR_H * TILE / 2, `${PWR_NAMES[slot]}\nOFFLINE`, {
-            fontFamily: 'Arial Black', fontSize: 14, color: '#ef4444', align: 'center'
-        }).setOrigin(0.5).setDepth(3).setAlpha(0);
-
-        region.layer.add([shroud, label]);
-
-        this.tweens.add({ targets: shroud, fillAlpha: 0.62, duration: 500 });
-        this.tweens.add({ targets: label, alpha: 0.75, duration: 500, delay: 200 });
+        for (const tower of region.towers)
+        {
+            if (tower.az === az) this.paintTower(tower);
+        }
     }
 
     //  Red edge pulse once the region is critical. Screen furniture, not board
@@ -2406,7 +2418,7 @@ export class Game extends Scene
             if (t.cooldown > 0) continue;
             if (!target) continue;
 
-            t.cooldown = t.spec.rate * penalty;
+            t.cooldown = t.spec.rate * penalty * (t.az.dark ? AZ_SLOW : 1);
             this.fire(t, target);
         }
 
@@ -2694,6 +2706,7 @@ export class Game extends Scene
             ['UNLOCK ALL TOWERS', () => this.unlockAll()],
             ['SPAWN NEXT WAVE NOW', () => this.forceWave()],
             ['PROVISION NEW REGION', () => this.provisionRegion()],
+            ['FAIL NEXT POWER DOMAIN', () => this.failNextPower()],
             ['REPAIR TO 100%', () => this.repair()],
             ['CLEAR THE BOARD', () => this.clearEnemies()]
         ];
@@ -2775,6 +2788,21 @@ export class Game extends Scene
     {
         this.integrity = 100;
         this.showIntegrity();
+    }
+
+    //  Trip the next power domain without grinding integrity down to reach it.
+    failNextPower ()
+    {
+        for (let slot = 0; slot < PWR_NAMES.length; slot++)
+        {
+            if (!this.powerLost.includes(slot))
+            {
+                this.killPowerDomain(slot);
+                return;
+            }
+        }
+
+        this.flashHud('EVERY POWER DOMAIN IS ALREADY DARK');
     }
 
     //  Every hall, not just the one on screen.

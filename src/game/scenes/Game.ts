@@ -343,7 +343,7 @@ export class Game extends Scene
         this.lastWaveText = '';
         this.sfxAt = {};
 
-        this.add.rectangle(512, 384, 1024, 768, BG);
+        this.add.image(512, 384, 'background');
 
         this.drawFloor();
         this.route = this.drawRoute();
@@ -389,7 +389,9 @@ export class Game extends Scene
                 const x = col * TILE;
                 const y = FLOOR_Y + row * TILE;
 
-                g.fillStyle((col + row) % 2 === 0 ? FLOOR : FLOOR_ALT, 1);
+                //  Partial alpha: bg.png is opaque, so solid panels would hide
+                //  the VPC and availability-zone structure baked into it.
+                g.fillStyle((col + row) % 2 === 0 ? FLOOR : FLOOR_ALT, 0.55);
                 g.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
 
                 //  Deterministic "random" so the layout is stable across reloads.

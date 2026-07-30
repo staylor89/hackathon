@@ -184,3 +184,18 @@ in the asset list and in the Preloader.
 All directional pieces are drawn pointing RIGHT (0 degrees), same as the mobs,
 so setRotation to the firing angle works without offsets. Orange stays the
 tower/UI colour throughout - the lanes read as the player's own fire.
+
+## Map backdrop (bg.png)
+
+1024 x 768, matching the canvas. Console-inspired: squid-ink nav band in the top
+64px (exactly the HUD band), dashed VPC boundary, three availability-zone panels
+snapped to the 64px grid with subnet CIDRs, column 00-15 / row A-K references,
+and plates for the internet gateway and the origin server.
+
+Already wired in Boot.ts as 'background'. Draw it first in Game.create():
+
+    this.add.image(512, 384, 'background');
+
+It replaces the flat 0x0b1120 rectangle. The faint grid baked in lines up with
+the grid the scene strokes, so keeping both is harmless. No orange anywhere -
+that stays with towers and UI.

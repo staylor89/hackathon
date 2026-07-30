@@ -43,6 +43,37 @@ export class Preloader extends Scene
         this.load.image('tower-iam', 'assets/tower-iam.png');
         this.load.image('tower-shield', 'assets/tower-shield.png');
         this.load.image('tower-waf', 'assets/tower-waf.png');
+
+        //  Sound. All synthesised by tools/make-sfx.mjs — 44.1kHz mono 16-bit
+        //  WAV, deliberately not MP3: encoder padding puts 10-30ms of silence
+        //  in front of every file, and Shield fires every 120ms.
+        //
+        //  make-sfx.mjs also emits glacier / lambda / guardduty / snowmobile
+        //  firing sounds for towers that don't exist yet. They're left unloaded
+        //  on purpose — Web Audio decodes everything loaded here up front.
+        this.load.audio('sfx-iam-fire', 'assets/sfx/tower-iam-fire.wav');
+        this.load.audio('sfx-shield-fire', 'assets/sfx/tower-shield-fire.wav');
+        this.load.audio('sfx-waf-fire', 'assets/sfx/tower-waf-fire.wav');
+
+        this.load.audio('sfx-tower-build', 'assets/sfx/tower-build.wav');
+        this.load.audio('sfx-tower-sell', 'assets/sfx/tower-sell.wav');
+        this.load.audio('sfx-tower-unlock', 'assets/sfx/tower-unlock.wav');
+        this.load.audio('sfx-tower-offline', 'assets/sfx/tower-offline.wav');
+
+        this.load.audio('sfx-enemy-hit', 'assets/sfx/enemy-hit.wav');
+        this.load.audio('sfx-enemy-death', 'assets/sfx/enemy-death.wav');
+        this.load.audio('sfx-boss-death', 'assets/sfx/boss-death.wav');
+        this.load.audio('sfx-ninja-dash', 'assets/sfx/ninja-dash.wav');
+
+        this.load.audio('sfx-breach', 'assets/sfx/breach.wav');
+        this.load.audio('sfx-breach-heavy', 'assets/sfx/breach-heavy.wav');
+
+        this.load.audio('sfx-wave-start', 'assets/sfx/wave-start.wav');
+        this.load.audio('sfx-wave-boss', 'assets/sfx/wave-boss.wav');
+        this.load.audio('sfx-region-down', 'assets/sfx/region-down.wav');
+
+        this.load.audio('sfx-ui-click', 'assets/sfx/ui-click.wav');
+        this.load.audio('sfx-place-denied', 'assets/sfx/place-denied.wav');
     }
 
     create ()

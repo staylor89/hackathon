@@ -51,6 +51,10 @@ interface TowerSpec {
     seesCloaked: boolean;
     colour: number;
     hex: string;
+    fireSfx: string;
+    fireGap: number;          // ms floor between plays of fireSfx, across all
+                              // towers of this kind — see sfx()
+    fireVolume: number;
 }
 
 const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
@@ -58,19 +62,26 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
         kind: 'iam', texture: 'tower-iam', name: 'IAM',
         unlock: 0, cost: 70, range: 120, rate: 340, damage: 9,
         bulletSpeed: 700, bulletRadius: 3, seesCloaked: true,
-        colour: CYAN, hex: '#38bdf8'
+        colour: CYAN, hex: '#38bdf8',
+        fireSfx: 'sfx-iam-fire', fireGap: 70, fireVolume: 0.85
     },
     shield: {
         kind: 'shield', texture: 'tower-shield', name: 'SHIELD',
         unlock: 200, cost: 120, range: 130, rate: 120, damage: 4,
         bulletSpeed: 780, bulletRadius: 2.5, seesCloaked: false,
-        colour: ACCENT, hex: '#ff9900'
+        colour: ACCENT, hex: '#ff9900',
+        //  Fires every 120ms per tower and there can be a dozen of them, so the
+        //  gap is most of the fire rate: at full board only about 1 shot in 6
+        //  is actually audible, which is the difference between a weapon and
+        //  white noise.
+        fireSfx: 'sfx-shield-fire', fireGap: 100, fireVolume: 0.7
     },
     waf: {
         kind: 'waf', texture: 'tower-waf', name: 'WAF',
         unlock: 350, cost: 200, range: 155, rate: 850, damage: 30,
         bulletSpeed: 620, bulletRadius: 5, seesCloaked: false,
-        colour: VIOLET, hex: '#a855f7'
+        colour: VIOLET, hex: '#a855f7',
+        fireSfx: 'sfx-waf-fire', fireGap: 60, fireVolume: 1
     }
 };
 
@@ -148,6 +159,9 @@ const SPIKE_MS = 1500;        // how long a spike lasts, grows with damage
 const BROWNOUT_EVERY = 4000;  // ms between brownouts once they start
 const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
 const OFFLINE = 0x475569;
+
+//  Second HUD line. Rewritten on mute so the state is visible while presenting.
+const HINT = 'DATA HALL 1  ·  AZ-C  ·  ESC MENU  ·  M MUTE';
 
 //  Cable route: enemies walk from off-screen left to the origin server.
 const WAYPOINTS: [number, number][] = [
@@ -251,6 +265,7 @@ export class Game extends Scene
     integrityBar: GameObjects.Rectangle;
     latencyText: GameObjects.Text;
     statusText: GameObjects.Text;
+    hintText: GameObjects.Text;
     vignette: GameObjects.Rectangle;
     pickers: Partial<Record<TowerKind, {
         box: GameObjects.Rectangle,
@@ -268,6 +283,37 @@ export class Game extends Scene
     //  Grid cell centre in pixels.
     cx (col: number) { return col * TILE + TILE / 2; }
     cy (row: number) { return FLOOR_Y + row * TILE + TILE / 2; }
+
+    // ── Sound ────────────────────────────────────────────────────────────
+
+    //  Scene time each key was last heard, so a key can refuse to retrigger.
+    sfxAt: Record<string, number> = {};
+
+    //  Every sound goes through here rather than this.sound.play() directly,
+    //  for two reasons.
+    //
+    //  minGap drops a play outright if the same key sounded too recently. By
+    //  mid-game there are 50+ shots a second on the board and Web Audio will
+    //  happily mix all of them into mush; dropping the surplus costs nothing
+    //  perceptually because nobody can pick out individual shots at that rate.
+    //
+    //  jitter detunes each play a little. Without it, identical samples stack
+    //  phase-coherently and read as one smeared tone instead of many shots.
+    sfx (key: string, opts: { volume?: number, minGap?: number, jitter?: number } = {})
+    {
+        const { volume = 1, minGap = 0, jitter = 0.06 } = opts;
+
+        if (minGap > 0)
+        {
+            if (this.time.now - (this.sfxAt[key] ?? -Infinity) < minGap) return;
+            this.sfxAt[key] = this.time.now;
+        }
+
+        this.sound.play(key, {
+            volume,
+            rate: 1 + (Math.random() * 2 - 1) * jitter
+        });
+    }
 
     create ()
     {
@@ -295,6 +341,7 @@ export class Game extends Scene
         this.burstEndsAt = 0;
         this.nextWaveAt = 0;
         this.lastWaveText = '';
+        this.sfxAt = {};
 
         this.add.rectangle(512, 384, 1024, 768, BG);
 
@@ -319,6 +366,13 @@ export class Game extends Scene
         this.input.keyboard?.on('keydown-ONE', () => this.pick('iam'));
         this.input.keyboard?.on('keydown-TWO', () => this.pick('shield'));
         this.input.keyboard?.on('keydown-THREE', () => this.pick('waf'));
+
+        //  Demoing this in a room full of people needs a kill switch. mute is
+        //  on the global SoundManager, so it survives a scene restart.
+        this.input.keyboard?.on('keydown-M', () => {
+            this.sound.mute = !this.sound.mute;
+            this.hintText.setText(this.sound.mute ? `${HINT}  ·  MUTED` : HINT);
+        });
     }
 
     // ── Map ──────────────────────────────────────────────────────────────
@@ -591,6 +645,8 @@ export class Game extends Scene
         sprite.setScale(0.4);
         this.tweens.add({ targets: sprite, scale: 1, duration: 180, ease: 'Back.Out' });
 
+        this.sfx('sfx-tower-build');
+
         const tower: Tower = {
             x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad, ring
         };
@@ -639,6 +695,8 @@ export class Game extends Scene
         tower.sold = true;
         this.towers = this.towers.filter(t => t !== tower);
 
+        this.sfx('sfx-tower-sell');
+
         this.budget += refund(tower.spec);
         this.budgetText.setText(`$${this.budget}`);
 
@@ -672,6 +730,7 @@ export class Game extends Scene
             return;
         }
 
+        this.sfx('sfx-ui-click', { volume: 0.7 });
         this.select(kind);
     }
 
@@ -689,6 +748,7 @@ export class Game extends Scene
         this.budgetText.setText(`$${this.budget}`);
         this.unlocked[kind] = true;
 
+        this.sfx('sfx-tower-unlock');
         this.flashHud(`${spec.name} UNLOCKED  ·  BUILD $${spec.cost}`, spec.hex);
         this.refreshPickers();
         this.select(kind);
@@ -697,6 +757,7 @@ export class Game extends Scene
     //  Can't afford it — flash the budget red.
     rejectPurchase ()
     {
+        this.sfx('sfx-place-denied', { minGap: 200 });
         this.budgetText.setColor('#ef4444');
         this.time.delayedCall(250, () => this.budgetText.setColor('#ff9900'));
     }
@@ -774,8 +835,13 @@ export class Game extends Scene
 
         if (tanks > 0)
         {
+            this.sfx('sfx-wave-boss');
             this.flashHud(`BOSS WAVE  ·  LEATHERBACK  ·  -${TANK_DAMAGE}% IF IT LANDS`);
             this.cameras.main.shake(500, 0.004);
+        }
+        else
+        {
+            this.sfx('sfx-wave-start', { volume: 0.85 });
         }
 
         this.time.addEvent({
@@ -958,6 +1024,10 @@ export class Game extends Scene
 
     smokePuff (x: number, y: number)
     {
+        //  Both ends of a dash puff, and every shinobi does it every 2.4s, so
+        //  this is throttled hard and mixed low.
+        this.sfx('sfx-ninja-dash', { volume: 0.6, minGap: 130 });
+
         const puff = this.add.circle(x, y, 10, 0x94a3b8, 0.45).setDepth(7);
 
         this.tweens.add({
@@ -1096,6 +1166,12 @@ export class Game extends Scene
         //  A flyer landing on the origin is a much bigger event than one more
         //  packet in the flood.
         const heavy = damage >= INJECT_DAMAGE;
+
+        //  The flood arrives 260ms apart, so a breach per packet would be a
+        //  drum roll. Heavy breaches are rare enough to always land.
+        if (heavy) this.sfx('sfx-breach-heavy');
+        else this.sfx('sfx-breach', { volume: 0.8, minGap: 150 });
+
         this.cameras.main.shake(heavy ? 320 : 180, heavy ? 0.012 : 0.006);
         this.cameras.main.flash(120, 239, 68, 68);
 
@@ -1229,6 +1305,7 @@ export class Game extends Scene
 
                 const t = PhaserMath.RND.pick(live);
                 t.offline = true;
+                this.sfx('sfx-tower-offline', { volume: 0.8 });
                 this.paintTower(t);
 
                 this.time.delayedCall(BROWNOUT_MS, () => {
@@ -1289,6 +1366,8 @@ export class Game extends Scene
         const spec = tower.spec;
         const bullet = this.add.circle(tower.x, tower.y, spec.bulletRadius, spec.colour).setDepth(6);
 
+        this.sfx(spec.fireSfx, { volume: spec.fireVolume, minGap: spec.fireGap });
+
         //  The WAF slug is slow and fat, so give it a muzzle flash to read as a
         //  heavy shot rather than a laggy one.
         if (spec.kind === 'waf')
@@ -1328,6 +1407,10 @@ export class Game extends Scene
     {
         this.over = true;
         this.spawner.remove();
+
+        //  Every firing sound is now dead, so this has the mix to itself. The
+        //  SoundManager is global, so the tail carries into the GameOver scene.
+        this.sfx('sfx-region-down');
 
         for (const e of this.enemies) if (e.alive) e.follower?.pauseFollow();
 
@@ -1448,6 +1531,12 @@ export class Game extends Scene
             const { flying, boss } = enemy;
             this.killEnemy(enemy, true);
 
+            //  A boss dying is a one-per-five-waves event and gets its own
+            //  sound; everything else shares the shell crack, throttled because
+            //  a Shield battery clears the flood several mobs at a time.
+            if (boss) this.sfx('sfx-boss-death');
+            else this.sfx('sfx-enemy-death', { volume: flying ? 0.9 : 0.7, minGap: 45 });
+
             const radius = boss ? 26 : flying ? 12 : 6;
             const pop = this.add.circle(x, y, radius, flying ? VIOLET : ACCENT).setDepth(6);
             this.tweens.add({
@@ -1463,6 +1552,11 @@ export class Game extends Scene
             }
             return;
         }
+
+        //  Hardest-throttled sound in the game: at Shield's fire rate this is
+        //  the single most frequent event, so most plays are dropped and the
+        //  ones that land sit barely above the floor.
+        this.sfx('sfx-enemy-hit', { volume: 0.55, minGap: 75 });
 
         //  A spark per hit rather than a tint flash — at this fire rate a flash
         //  would leave the mob white for most of its short life.
@@ -1483,7 +1577,7 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 20, color: '#e6edf3'
         }).setDepth(10);
 
-        this.add.text(16, 40, 'DATA HALL 1  ·  AZ-C  ·  ESC MENU', {
+        this.hintText = this.add.text(16, 40, this.sound.mute ? `${HINT}  ·  MUTED` : HINT, {
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setDepth(10);
 

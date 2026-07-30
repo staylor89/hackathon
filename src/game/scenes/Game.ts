@@ -75,8 +75,7 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     shield: {
         kind: 'shield', texture: 'tower-shield', name: 'SHIELD',
         unlock: 200, cost: 120, range: 130, rate: 120, damage: 4,
-        //  Ring, so it carries no heading.
-        bulletSpeed: 780, shot: 'shot-shield', shotFacing: false, seesCloaked: false,
+        bulletSpeed: 780, shot: 'shot-shield', shotFacing: true, seesCloaked: false,
         colour: ACCENT, hex: '#ff9900',
         //  Fires every 120ms per tower and there can be a dozen of them, so the
         //  gap is most of the fire rate: at full board only about 1 shot in 6
@@ -87,8 +86,7 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     waf: {
         kind: 'waf', texture: 'tower-waf', name: 'WAF',
         unlock: 350, cost: 200, range: 155, rate: 850, damage: 30,
-        //  Flak burst, radial like the shield ring.
-        bulletSpeed: 620, shot: 'shot-waf', shotFacing: false, seesCloaked: false,
+        bulletSpeed: 620, shot: 'shot-waf', shotFacing: true, seesCloaked: false,
         colour: VIOLET, hex: '#a855f7',
         fireSfx: 'sfx-waf-fire', fireGap: 60, fireVolume: 1
     },
@@ -108,6 +106,12 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
 };
 
 const TOWER_ORDER: TowerKind[] = ['iam', 'shield', 'waf', 'snowmobile'];
+
+//  Recoil. The emplacement slides back along its firing line and eases home.
+//  RECOIL_SETTLE is a per-second rate, so the return is framerate-independent.
+const RECOIL_PX = 4;
+const RECOIL_BEAM_PX = 9;
+const RECOIL_SETTLE = 14;
 
 //  Half the width of the ice lance: anything within this of the line takes the
 //  full hit, and the beam carries on past its target to the edge of range.
@@ -1546,6 +1550,7 @@ export class Game extends Scene
 
         this.sfx(spec.fireSfx, { volume: spec.fireVolume, minGap: spec.fireGap });
 
+        this.kick(tower, angle);
         this.muzzle(tower.x, tower.y, angle);
         this.tracer(tower.x, tower.y, tx, ty, angle);
 
@@ -1553,18 +1558,22 @@ export class Game extends Scene
 
         if (spec.shotFacing) bullet.setRotation(angle);
 
-        //  Shield's ring widens on the way out, so it reads as a pulse leaving
-        //  the plate rather than a pellet.
-        if (spec.kind === 'shield')
-        {
-            bullet.setScale(0.4);
-            this.tweens.add({ targets: bullet, scale: 1, duration: 220, ease: 'Cubic.Out' });
-        }
-
         this.bullets.push({
             obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed,
             facing: spec.shotFacing
         });
+    }
+
+    //  Punch the emplacement back along its firing line. Nothing tweens it
+    //  home — the tower loop in update() eases every sprite back to its slot,
+    //  so a kick can land while the build pop is still playing, and Shield's
+    //  120ms cadence can't stack recoils on top of each other.
+    kick (tower: Tower, angle: number)
+    {
+        const back = tower.spec.beam ? RECOIL_BEAM_PX : RECOIL_PX;
+
+        tower.sprite.x = tower.x - Math.cos(angle) * back;
+        tower.sprite.y = tower.y - Math.sin(angle) * back;
     }
 
     //  Bore bloom. Shared by projectile and beam towers, so the discharge and
@@ -1604,6 +1613,8 @@ export class Game extends Scene
         const len = spec.range + BEAM_OVERSHOOT;
         const cos = Math.cos(angle);
         const sin = Math.sin(angle);
+
+        this.kick(tower, angle);
 
         //  Project each mob onto the beam: `along` is how far down the lance it
         //  sits, `off` is how far off the centre line.
@@ -1767,6 +1778,25 @@ export class Game extends Scene
 
         for (const t of this.towers)
         {
+            //  Settle any recoil first, so a tower that browns out mid-kick
+            //  still slides home instead of freezing off-centre.
+            const dx = t.x - t.sprite.x;
+            const dy = t.y - t.sprite.y;
+
+            if (dx !== 0 || dy !== 0)
+            {
+                if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1)
+                {
+                    t.sprite.setPosition(t.x, t.y);
+                }
+                else
+                {
+                    const settle = Math.min(1, dt * RECOIL_SETTLE);
+                    t.sprite.x += dx * settle;
+                    t.sprite.y += dy * settle;
+                }
+            }
+
             if (t.offline) continue;
 
             t.cooldown -= delta;
@@ -1784,7 +1814,6 @@ export class Game extends Scene
         {
             if (!b.target.alive)
             {
-                this.tweens.killTweensOf(b.obj);
                 b.obj.destroy();
                 continue;
             }
@@ -1797,7 +1826,6 @@ export class Game extends Scene
             if (d <= step + 6)
             {
                 this.hit(b.target, b.damage);
-                this.tweens.killTweensOf(b.obj);
                 b.obj.destroy();
                 continue;
             }

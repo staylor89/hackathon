@@ -26,11 +26,23 @@ export class Preloader extends Scene
 
     preload ()
     {
+        //  The default intruder — shinobi tortoise. Every wave spawns these.
+        this.load.image('tortoise-default', 'assets/tortoise-default.png');
+
         //  DDoS swarm tortoise. 64x64, drawn facing right.
         this.load.image('tortoise-ddos', 'assets/tortoise-ddos.png');
 
         //  SQL injection tortoise — the flyer. 64x64, drawn facing right.
         this.load.image('tortoise-injection', 'assets/tortoise-injection.png');
+
+        //  Leatherback tank — the boss. 96x96, not 64.
+        this.load.image('tortoise-tank', 'assets/tortoise-tank.png');
+
+        //  Towers. 64x64 top-down emplacements, drawn on a 50x50 baseplate, so
+        //  they sit on a 64px grid tile at scale 1 with no fitting to do.
+        this.load.image('tower-iam', 'assets/tower-iam.png');
+        this.load.image('tower-shield', 'assets/tower-shield.png');
+        this.load.image('tower-waf', 'assets/tower-waf.png');
     }
 
     create ()

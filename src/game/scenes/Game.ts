@@ -26,44 +26,78 @@ const RACK_LIP = 0x27384f;
 const VIOLET = 0xa855f7;
 
 //  ── Towers ───────────────────────────────────────────────────────────────
+//  IAM: the starter. Cheap, middling everything, and the only tower that can
+//  target a cloaked shinobi — identity checks see through the disguise.
 //  SHIELD: rapid fire, tiny per-shot damage. Built to shred swarms, poor
 //  against anything with real HP.
 //  WAF: slow, expensive, huge per-shot damage. The answer to injection
 //  flyers; wasted on the DDoS swarm because most of each shot is overkill.
-type TowerKind = 'shield' | 'waf';
+//
+//  unlock is a one-off purchase per run before the tower can be built at all.
+//  IAM starts unlocked so wave 1 is always playable.
+type TowerKind = 'iam' | 'shield' | 'waf';
 
 interface TowerSpec {
     kind: TowerKind;
-    label: string;            // drawn on the tower box
+    texture: string;          // 64x64 emplacement art, drawn at scale 1
     name: string;             // shown in the HUD picker
-    cost: number;
+    unlock: number;           // one-off cost to make it buildable
+    cost: number;             // per-tower build cost
     range: number;
     rate: number;             // ms between shots
     damage: number;
     bulletSpeed: number;      // px/sec — must outpace the fire rate
     bulletRadius: number;
+    seesCloaked: boolean;
     colour: number;
     hex: string;
 }
 
 const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
+    iam: {
+        kind: 'iam', texture: 'tower-iam', name: 'IAM',
+        unlock: 0, cost: 70, range: 120, rate: 340, damage: 9,
+        bulletSpeed: 700, bulletRadius: 3, seesCloaked: true,
+        colour: CYAN, hex: '#38bdf8'
+    },
     shield: {
-        kind: 'shield', label: 'SHLD', name: 'SHIELD',
-        cost: 100, range: 130, rate: 120, damage: 4,
-        bulletSpeed: 780, bulletRadius: 2.5, colour: ACCENT, hex: '#ff9900'
+        kind: 'shield', texture: 'tower-shield', name: 'SHIELD',
+        unlock: 200, cost: 120, range: 130, rate: 120, damage: 4,
+        bulletSpeed: 780, bulletRadius: 2.5, seesCloaked: false,
+        colour: ACCENT, hex: '#ff9900'
     },
     waf: {
-        kind: 'waf', label: 'WAF', name: 'WAF',
-        cost: 175, range: 155, rate: 850, damage: 30,
-        bulletSpeed: 620, bulletRadius: 5, colour: VIOLET, hex: '#a855f7'
+        kind: 'waf', texture: 'tower-waf', name: 'WAF',
+        unlock: 350, cost: 200, range: 155, rate: 850, damage: 30,
+        bulletSpeed: 620, bulletRadius: 5, seesCloaked: false,
+        colour: VIOLET, hex: '#a855f7'
     }
 };
+
+const TOWER_ORDER: TowerKind[] = ['iam', 'shield', 'waf'];
 
 //  Selling a tower hands back half of what it cost.
 const SELL_RATE = 0.5;
 const refund = (spec: TowerSpec) => Math.floor(spec.cost * SELL_RATE);
 
 //  ── Enemies ──────────────────────────────────────────────────────────────
+//  Shinobi (the default mob): walks the trench, but every couple of seconds it
+//  throws smoke and dashes — cloaked, so only IAM can shoot it, and moving at
+//  several times its normal speed. Present in every wave from wave 1.
+const NINJA_SPEED = 88;       // px/sec along the trench
+const NINJA_HP = 26;          // +7 per wave
+const NINJA_DAMAGE = 4;
+const NINJA_SCALE = 0.72;     // README asks for ~48px on screen
+const NINJA_BOUNTY_MULT = 2;
+const NINJA_CLOAK_EVERY = 2400;   // ms between dashes
+const NINJA_CLOAK_MS = 700;       // how long each dash lasts
+const NINJA_DASH_MULT = 2.4;      // path speed multiplier while dashing
+const NINJA_CLOAK_ALPHA = 0.28;
+
+const NINJA_BASE = 4;         // shinobi in wave 1
+const NINJA_GROWTH = 1;       // extra per wave
+const NINJA_SPACING = 1500;   // ms between shinobi inside a wave
+
 //  DDoS: small, fragile, arrives in a flood. Individually harmless.
 const DDOS_SPEED = 115;       // px/sec along the trench
 const DDOS_HP = 12;           // +3 per wave
@@ -81,13 +115,25 @@ const INJECT_BOUNTY_MULT = 4; // paid as bounty x this
 const INJECT_SPREAD = 78;     // degrees of random heading either side of "toward origin"
 const INJECT_TURN_MIN = 220;  // ms before it picks a new heading
 const INJECT_TURN_MAX = 640;
-const INJECT_FIRST_WAVE = 2;  // no flyers in wave 1
-const INJECT_SPACING = 1600;  // ms between flyers inside a wave
+const INJECT_FIRST_WAVE = 3;  // flyers join in wave 3
+const INJECT_SPACING = 2200;  // ms between flyers inside a wave
 
-const SWARM_BASE = 8;         // mobs in wave 1
+//  Leatherback tank: the boss. Crawls, soaks an enormous amount of damage, and
+//  takes a quarter of the origin with it if it lands. Every fifth wave only.
+const TANK_EVERY = 5;         // boss wave cadence
+const TANK_SPEED = 30;        // px/sec — a crawl; nearly a minute end to end
+const TANK_HP = 420;          // +140 per wave
+const TANK_DAMAGE = 25;       // integrity lost if it reaches the origin
+const TANK_SCALE = 0.84;      // 96x96 art → ~80px on screen, per the README
+const TANK_BOUNTY_MULT = 12;
+const TANK_SPACING = 3200;    // ms between tanks once there is more than one
+
+const DDOS_FIRST_WAVE = 2;    // the flood joins in wave 2
+const SWARM_BASE = 6;         // mobs in the first flood wave
 const SWARM_GROWTH = 2;       // extra mobs per wave
-const SWARM_SPACING = 180;    // ms between mobs inside a wave
-const WAVE_GAP = 6000;        // ms of quiet between waves
+const SWARM_SPACING = 260;    // ms between mobs inside a wave
+const WAVE_GAP = 10000;       // ms of quiet between waves
+const PREP_MS = 15000;        // build phase before wave 1 lands
 
 //  Where the flyers are headed — the front face of the origin rack.
 const ORIGIN_X = 960;
@@ -120,6 +166,7 @@ interface Enemy {
     obj: GameObjects.Sprite;
     follower?: GameObjects.PathFollower;   // only set for trench walkers
     flying: boolean;
+    boss: boolean;
     hp: number;
     maxHp: number;
     damage: number;                        // integrity cost of a breach
@@ -127,10 +174,14 @@ interface Enemy {
     barBg: GameObjects.Rectangle;
     bar: GameObjects.Rectangle;
     barW: number;
+    barOffset: number;                     // px above the sprite, scales with art
     shadow?: GameObjects.Ellipse;          // ground shadow, sells the flight
     vx: number;
     vy: number;
     turnAt: number;                        // scene time to pick a new heading
+    cloaked: boolean;                      // only IAM can target it right now
+    cloakAt: number;                       // scene time of the next smoke dash
+    uncloakAt: number;                     // scene time the current dash ends
     alive: boolean;
 }
 
@@ -141,8 +192,7 @@ interface Tower {
     cooldown: number;
     offline: boolean;
     sold: boolean;                      // stops queued brownouts touching it
-    box: GameObjects.Rectangle;
-    label: GameObjects.Text;
+    sprite: GameObjects.Image;          // state is expressed by tinting this
     pad: GameObjects.Rectangle;         // slot underneath, re-armed on sell
     ring: GameObjects.Arc;
 }
@@ -172,13 +222,22 @@ export class Game extends Scene
     latency = BASE_LATENCY;   // displayed p99, tweened back down after a spike
     tiersHit = 0;
 
-    //  Which tower the next click builds.
-    selected: TowerKind = 'shield';
+    //  Which tower the next click builds, and which are bought at all.
+    selected: TowerKind = 'iam';
+    unlocked: Record<TowerKind, boolean> = { iam: true, shield: false, waf: false };
 
     //  Live objects
     enemies: Enemy[] = [];
     towers: Tower[] = [];
     bullets: Bullet[] = [];
+
+    //  Wave clock. burstEndsAt is when the last mob of the current wave has
+    //  spawned; between that and nextWaveAt the HUD counts down instead of
+    //  listing the composition.
+    waveLabel = '';
+    burstEndsAt = 0;
+    nextWaveAt = 0;
+    lastWaveText = '';
 
     route: Phaser.Curves.Path;
     spawner: Phaser.Time.TimerEvent;
@@ -193,7 +252,13 @@ export class Game extends Scene
     latencyText: GameObjects.Text;
     statusText: GameObjects.Text;
     vignette: GameObjects.Rectangle;
-    pickers: Partial<Record<TowerKind, { box: GameObjects.Rectangle, text: GameObjects.Text }>> = {};
+    pickers: Partial<Record<TowerKind, {
+        box: GameObjects.Rectangle,
+        icon: GameObjects.Image,
+        text: GameObjects.Text,
+        sub: GameObjects.Text,      // stat line, or the unlock price while locked
+        stats: string
+    }>> = {};
 
     constructor ()
     {
@@ -223,8 +288,13 @@ export class Game extends Scene
         this.latency = BASE_LATENCY;
         this.tiersHit = 0;
         this.brownoutTimer = undefined;
-        this.selected = 'shield';
+        this.selected = 'iam';
+        this.unlocked = { iam: true, shield: false, waf: false };
         this.pickers = {};
+        this.waveLabel = '';
+        this.burstEndsAt = 0;
+        this.nextWaveAt = 0;
+        this.lastWaveText = '';
 
         this.add.rectangle(512, 384, 1024, 768, BG);
 
@@ -236,14 +306,19 @@ export class Game extends Scene
         this.drawPads();
         this.drawHud();
 
-        this.startWave();
+        //  Build phase: nothing spawns until the player has had time to spend
+        //  the opening budget.
+        this.nextWaveAt = this.time.now + PREP_MS;
+        this.spawner = this.time.delayedCall(PREP_MS, () => this.startWave());
+        this.flashHud('BUILD PHASE  ·  SPEND YOUR BUDGET', '#38bdf8');
 
         this.input.keyboard?.once('keydown-ESC', () => {
             this.scene.start('MainMenu');
         });
 
-        this.input.keyboard?.on('keydown-ONE', () => this.select('shield'));
-        this.input.keyboard?.on('keydown-TWO', () => this.select('waf'));
+        this.input.keyboard?.on('keydown-ONE', () => this.pick('iam'));
+        this.input.keyboard?.on('keydown-TWO', () => this.pick('shield'));
+        this.input.keyboard?.on('keydown-THREE', () => this.pick('waf'));
     }
 
     // ── Map ──────────────────────────────────────────────────────────────
@@ -488,9 +563,7 @@ export class Game extends Scene
 
             if (this.budget < spec.cost)
             {
-                //  Can't afford it — flash the budget red.
-                this.budgetText.setColor('#ef4444');
-                this.time.delayedCall(250, () => this.budgetText.setColor('#ff9900'));
+                this.rejectPurchase();
                 return;
             }
 
@@ -509,50 +582,55 @@ export class Game extends Scene
 
     buildTower (x: number, y: number, spec: TowerSpec, pad: GameObjects.Rectangle, ring: GameObjects.Arc)
     {
-        const box = this.add.rectangle(x, y, 40, 40, 0x16243a)
-            .setStrokeStyle(2, spec.colour)
+        //  The art is a 64x64 emplacement on a 50x50 baseplate, so it drops
+        //  onto a 64px grid tile at scale 1 — no fitting, no label needed.
+        const sprite = this.add.image(x, y, spec.texture)
             .setDepth(4)
             .setInteractive({ useHandCursor: true });
 
-        const label = this.add.text(x, y, spec.label, {
-            fontFamily: 'Arial Black', fontSize: 11, color: spec.hex
-        }).setOrigin(0.5).setDepth(4);
-
-        box.setScale(0.4);
-        label.setScale(0.4);
-        this.tweens.add({ targets: [box, label], scale: 1, duration: 180, ease: 'Back.Out' });
+        sprite.setScale(0.4);
+        this.tweens.add({ targets: sprite, scale: 1, duration: 180, ease: 'Back.Out' });
 
         const tower: Tower = {
-            x, y, spec, cooldown: 0, offline: false, sold: false, box, label, pad, ring
+            x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad, ring
         };
 
         //  Hovering a built tower shows its real range and what it sells for.
-        const tag = this.add.text(x, y - 32, `SELL +$${refund(spec)}`, {
+        const tag = this.add.text(x, y - 40, `SELL +$${refund(spec)}`, {
             fontFamily: 'Arial Black', fontSize: 11, color: '#22c55e',
             backgroundColor: '#0b1120', padding: { x: 4, y: 2 }
         }).setOrigin(0.5).setDepth(11).setVisible(false);
 
-        box.on('pointerover', () => {
+        sprite.on('pointerover', () => {
             ring.setRadius(spec.range);
             ring.setFillStyle(spec.colour, 0.07).setStrokeStyle(1, spec.colour, 0.35);
             ring.setVisible(true);
-            box.setStrokeStyle(2, GREEN);
+            sprite.setTint(0x86efac);
             tag.setVisible(true);
         });
 
-        box.on('pointerout', () => {
+        sprite.on('pointerout', () => {
             ring.setVisible(false);
-            box.setStrokeStyle(2, tower.offline ? OFFLINE : spec.colour);
+            this.paintTower(tower);
             tag.setVisible(false);
         });
 
-        box.on('pointerdown', () => {
+        sprite.on('pointerdown', () => {
             if (this.over || tower.sold) return;
             tag.destroy();
             this.sellTower(tower);
         });
 
         this.towers.push(tower);
+    }
+
+    //  Restore a tower's resting look: dark while browned out, plain otherwise.
+    paintTower (tower: Tower)
+    {
+        if (tower.sold) return;
+
+        if (tower.offline) tower.sprite.setTint(OFFLINE);
+        else tower.sprite.clearTint();
     }
 
     //  Refund half the build cost and re-arm the pad underneath.
@@ -567,8 +645,7 @@ export class Game extends Scene
         //  Any bullet already in flight keeps going — it's paid for.
         const { x, y } = tower;
         tower.ring.setVisible(false);
-        tower.box.destroy();
-        tower.label.destroy();
+        tower.sprite.destroy();
 
         tower.pad.setInteractive({ useHandCursor: true });
         tower.pad.setFillStyle(BG, 0).setStrokeStyle(1, PAD_LINE, 0.9);
@@ -583,22 +660,83 @@ export class Game extends Scene
         });
     }
 
-    //  Change which tower the next click builds.
+    //  Clicking a HUD button (or pressing its number) buys the tower if it is
+    //  still locked, otherwise just arms it.
+    pick (kind: TowerKind)
+    {
+        if (this.over) return;
+
+        if (!this.unlocked[kind])
+        {
+            this.unlockTower(kind);
+            return;
+        }
+
+        this.select(kind);
+    }
+
+    unlockTower (kind: TowerKind)
+    {
+        const spec = TOWER_SPECS[kind];
+
+        if (this.budget < spec.unlock)
+        {
+            this.rejectPurchase();
+            return;
+        }
+
+        this.budget -= spec.unlock;
+        this.budgetText.setText(`$${this.budget}`);
+        this.unlocked[kind] = true;
+
+        this.flashHud(`${spec.name} UNLOCKED  ·  BUILD $${spec.cost}`, spec.hex);
+        this.refreshPickers();
+        this.select(kind);
+    }
+
+    //  Can't afford it — flash the budget red.
+    rejectPurchase ()
+    {
+        this.budgetText.setColor('#ef4444');
+        this.time.delayedCall(250, () => this.budgetText.setColor('#ff9900'));
+    }
+
+    //  Change which tower the next click builds. Locked towers can't be armed.
     select (kind: TowerKind)
     {
-        this.selected = kind;
+        if (!this.unlocked[kind]) return;
 
-        for (const k of Object.keys(TOWER_SPECS) as TowerKind[])
+        this.selected = kind;
+        this.refreshPickers();
+    }
+
+    //  Repaint every HUD button from unlock + selection state.
+    refreshPickers ()
+    {
+        for (const k of TOWER_ORDER)
         {
             const picker = this.pickers[k];
             if (!picker) continue;
 
             const spec = TOWER_SPECS[k];
-            const on = k === kind;
+            const locked = !this.unlocked[k];
+            const on = k === this.selected;
+
+            if (locked)
+            {
+                picker.box.setStrokeStyle(1, PAD_LINE, 0.9);
+                picker.box.setFillStyle(BG, 0);
+                picker.icon.setAlpha(0.3).setTint(OFFLINE);
+                picker.text.setColor('#5c728a');
+                picker.sub.setText(`UNLOCK $${spec.unlock}`).setColor('#8ea3b8');
+                continue;
+            }
 
             picker.box.setStrokeStyle(on ? 2 : 1, spec.colour, on ? 1 : 0.35);
             picker.box.setFillStyle(spec.colour, on ? 0.18 : 0);
+            picker.icon.setAlpha(on ? 1 : 0.6).clearTint();
             picker.text.setColor(on ? spec.hex : '#5c728a');
+            picker.sub.setText(picker.stats).setColor('#5c728a');
         }
     }
 
@@ -611,20 +749,49 @@ export class Game extends Scene
 
         this.wave++;
 
-        const count = SWARM_BASE + (this.wave - 1) * SWARM_GROWTH;
+        //  Shinobi are the constant; the flood and the flyers layer on top as
+        //  the run goes on.
+        const ninjas = NINJA_BASE + (this.wave - 1) * NINJA_GROWTH;
+
+        const flood = this.wave < DDOS_FIRST_WAVE
+            ? 0
+            : SWARM_BASE + (this.wave - DDOS_FIRST_WAVE) * SWARM_GROWTH;
+
         const flyers = this.wave < INJECT_FIRST_WAVE
             ? 0
             : 1 + Math.floor((this.wave - INJECT_FIRST_WAVE) / 2);
 
-        this.waveText.setText(flyers > 0
-            ? `WAVE ${this.wave}  ·  DDoS x${count}  ·  SQLi x${flyers}`
-            : `WAVE ${this.wave}  ·  DDoS FLOOD  x${count}`);
+        //  Boss wave every fifth round; a second tank joins from wave 15.
+        const tanks = this.wave % TANK_EVERY === 0
+            ? 1 + Math.floor((this.wave - TANK_EVERY) / 10)
+            : 0;
+
+        const parts = [`SHINOBI x${ninjas}`];
+        if (flood > 0) parts.push(`DDoS x${flood}`);
+        if (flyers > 0) parts.push(`SQLi x${flyers}`);
+        if (tanks > 0) parts.push(`TANK x${tanks}`);
+        this.waveLabel = `WAVE ${this.wave}  ·  ${parts.join('  ·  ')}`;
+
+        if (tanks > 0)
+        {
+            this.flashHud(`BOSS WAVE  ·  LEATHERBACK  ·  -${TANK_DAMAGE}% IF IT LANDS`);
+            this.cameras.main.shake(500, 0.004);
+        }
 
         this.time.addEvent({
-            delay: SWARM_SPACING,
-            repeat: count - 1,
-            callback: () => this.spawnDdos()
+            delay: NINJA_SPACING,
+            repeat: ninjas - 1,
+            callback: () => this.spawnNinja()
         });
+
+        if (flood > 0)
+        {
+            this.time.addEvent({
+                delay: SWARM_SPACING,
+                repeat: flood - 1,
+                callback: () => this.spawnDdos()
+            });
+        }
 
         if (flyers > 0)
         {
@@ -635,12 +802,168 @@ export class Game extends Scene
             });
         }
 
-        //  Next wave starts once the longer of the two bursts has landed, plus
-        //  the current gap, which the degradation tiers shorten as the origin
-        //  takes damage.
-        const burst = Math.max(count * SWARM_SPACING, flyers * INJECT_SPACING);
+        if (tanks > 0)
+        {
+            this.time.addEvent({
+                delay: TANK_SPACING,
+                repeat: tanks - 1,
+                callback: () => this.spawnTank()
+            });
+        }
+
+        //  Next wave starts once the longest burst has landed, plus the current
+        //  gap, which the degradation tiers shorten as the origin takes damage.
+        //  A tank is still crawling long after its wave is nominally over.
+        const burst = Math.max(
+            ninjas * NINJA_SPACING,
+            flood * SWARM_SPACING,
+            flyers * INJECT_SPACING,
+            tanks * TANK_SPACING
+        );
+
+        this.burstEndsAt = this.time.now + burst;
+        this.nextWaveAt = this.time.now + burst + this.waveGap;
 
         this.spawner = this.time.delayedCall(burst + this.waveGap, () => this.startWave());
+    }
+
+    //  One line that either lists what is inbound or counts down to it.
+    updateWaveText ()
+    {
+        const quiet = this.time.now >= this.burstEndsAt;
+        const secs = Math.max(0, Math.ceil((this.nextWaveAt - this.time.now) / 1000));
+
+        const text = quiet
+            ? `WAVE ${this.wave + 1} INBOUND  ·  ${secs}s`
+            : this.waveLabel;
+
+        if (text === this.lastWaveText) return;
+
+        this.lastWaveText = text;
+        this.waveText.setText(text);
+        this.waveText.setColor(quiet ? '#38bdf8' : '#8ea3b8');
+    }
+
+    //  The default intruder. Walks the trench like the flood does, but dashes
+    //  cloaked every couple of seconds — see cloakDash() and update().
+    spawnNinja ()
+    {
+        if (this.over) return;
+
+        const maxHp = NINJA_HP + (this.wave - 1) * 7;
+        const start = this.route.getStartPoint();
+        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-default')
+            .setDepth(6)
+            .setScale(NINJA_SCALE);
+
+        const barBg = this.add.rectangle(0, 0, 30, 5, 0x000000, 0.6).setDepth(7);
+        const bar = this.add.rectangle(0, 0, 28, 3, RED).setOrigin(0, 0.5).setDepth(7);
+
+        const enemy = this.addEnemy({
+            obj, follower: obj, flying: false, boss: false,
+            hp: maxHp, maxHp, damage: NINJA_DAMAGE, bountyMult: NINJA_BOUNTY_MULT,
+            barBg, bar, barW: 28, barOffset: 30,
+            vx: 0, vy: 0, turnAt: 0,
+            cloaked: false,
+            //  Stagger the first dash so a line of them doesn't blink in unison.
+            cloakAt: this.time.now + PhaserMath.Between(600, NINJA_CLOAK_EVERY),
+            uncloakAt: 0,
+            alive: true
+        });
+
+        obj.startFollow({
+            duration: (this.route.getLength() / NINJA_SPEED) * 1000,
+            positionOnPath: true,
+            rotateToPath: true,
+            onComplete: () => this.breach(enemy)
+        });
+    }
+
+    //  Boss. Same trench as everything else on the ground, just far bigger and
+    //  far slower, and it hurts badly if it gets through.
+    spawnTank ()
+    {
+        if (this.over) return;
+
+        const maxHp = TANK_HP + (this.wave - 1) * 140;
+        const start = this.route.getStartPoint();
+        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-tank')
+            .setDepth(5)
+            .setScale(TANK_SCALE);
+
+        const barBg = this.add.rectangle(0, 0, 56, 7, 0x000000, 0.7).setDepth(7);
+        const bar = this.add.rectangle(0, 0, 54, 5, RED).setOrigin(0, 0.5).setDepth(7);
+
+        const enemy = this.addEnemy({
+            obj, follower: obj, flying: false, boss: true,
+            hp: maxHp, maxHp, damage: TANK_DAMAGE, bountyMult: TANK_BOUNTY_MULT,
+            barBg, bar, barW: 54, barOffset: 48,
+            vx: 0, vy: 0, turnAt: 0,
+            cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
+        });
+
+        obj.startFollow({
+            duration: (this.route.getLength() / TANK_SPEED) * 1000,
+            positionOnPath: true,
+            rotateToPath: true,
+            onComplete: () => this.breach(enemy)
+        });
+
+        //  Slow heave rather than the DDoS scuttle — it should read as heavy.
+        this.tweens.add({
+            targets: obj,
+            scale: TANK_SCALE * 1.05,
+            duration: 900,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.InOut'
+        });
+    }
+
+    //  Smoke bomb: untargetable by everything but IAM, and the path tween runs
+    //  several times faster for the length of the dash.
+    cloakDash (enemy: Enemy)
+    {
+        enemy.cloaked = true;
+        enemy.cloakAt = 0;
+        enemy.uncloakAt = this.time.now + NINJA_CLOAK_MS;
+
+        enemy.obj.setAlpha(NINJA_CLOAK_ALPHA);
+        enemy.barBg.setAlpha(0.25);
+        enemy.bar.setAlpha(0.25);
+
+        //  pathTween is what startFollow() drives; scaling it is the cheapest
+        //  way to change speed mid-follow without restarting the follow.
+        const tween = enemy.follower?.pathTween;
+        if (tween) tween.timeScale = NINJA_DASH_MULT;
+
+        this.smokePuff(enemy.obj.x, enemy.obj.y);
+    }
+
+    uncloak (enemy: Enemy)
+    {
+        enemy.cloaked = false;
+        enemy.cloakAt = this.time.now + NINJA_CLOAK_EVERY;
+        enemy.uncloakAt = 0;
+
+        enemy.obj.setAlpha(1);
+        enemy.barBg.setAlpha(1);
+        enemy.bar.setAlpha(1);
+
+        const tween = enemy.follower?.pathTween;
+        if (tween) tween.timeScale = 1;
+
+        this.smokePuff(enemy.obj.x, enemy.obj.y);
+    }
+
+    smokePuff (x: number, y: number)
+    {
+        const puff = this.add.circle(x, y, 10, 0x94a3b8, 0.45).setDepth(7);
+
+        this.tweens.add({
+            targets: puff, scale: 2.2, alpha: 0, duration: 320,
+            onComplete: () => puff.destroy()
+        });
     }
 
     //  Register a mob and hand it back, so callers can wire up callbacks that
@@ -665,10 +988,11 @@ export class Game extends Scene
         const bar = this.add.rectangle(0, 0, 18, 2, RED).setOrigin(0, 0.5).setDepth(6);
 
         const enemy = this.addEnemy({
-            obj, follower: obj, flying: false,
+            obj, follower: obj, flying: false, boss: false,
             hp: maxHp, maxHp, damage: DDOS_DAMAGE, bountyMult: 1,
-            barBg, bar, barW: 18,
-            vx: 0, vy: 0, turnAt: 0, alive: true
+            barBg, bar, barW: 18, barOffset: 18,
+            vx: 0, vy: 0, turnAt: 0,
+            cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
         });
 
         obj.startFollow({
@@ -710,10 +1034,11 @@ export class Game extends Scene
         const bar = this.add.rectangle(0, 0, 32, 3, VIOLET).setOrigin(0, 0.5).setDepth(9);
 
         this.addEnemy({
-            obj, flying: true,
+            obj, flying: true, boss: false,
             hp: maxHp, maxHp, damage: INJECT_DAMAGE, bountyMult: INJECT_BOUNTY_MULT,
-            barBg, bar, barW: 32, shadow,
-            vx: INJECT_SPEED, vy: 0, turnAt: 0, alive: true
+            barBg, bar, barW: 32, barOffset: 28, shadow,
+            vx: INJECT_SPEED, vy: 0, turnAt: 0,
+            cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
         });
 
         //  Wing-beat wobble. Flyers do not scuttle.
@@ -833,12 +1158,12 @@ export class Game extends Scene
             { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
             { at: 80, run: () => this.killPowerDomain(12, 0, 4, 3, 'PWR-A') },
             { at: 70, run: () => { this.bounty = 6; this.flashHud('BILLING THROTTLED  ·  BOUNTY $6'); } },
-            { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(4500); } },
+            { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(7500); } },
             { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
             { at: 40, run: () => { this.killPowerDomain(0, 8, 4, 3, 'PWR-B'); this.spikeMs = 4000; } },
-            { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(3000); } },
+            { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(5500); } },
             { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
-            { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(1500); this.flashHud('REGION FAILING'); } }
+            { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(3500); this.flashHud('REGION FAILING'); } }
         ];
 
         //  tiersHit counts how many have fired, so each one runs exactly once
@@ -904,16 +1229,14 @@ export class Game extends Scene
 
                 const t = PhaserMath.RND.pick(live);
                 t.offline = true;
-                t.box.setStrokeStyle(2, OFFLINE);
-                t.label.setColor('#475569');
+                this.paintTower(t);
 
                 this.time.delayedCall(BROWNOUT_MS, () => {
                     //  It may have been sold out from under us mid-brownout.
                     if (t.sold) return;
 
                     t.offline = false;
-                    t.box.setStrokeStyle(2, t.spec.colour);
-                    t.label.setColor(t.spec.hex);
+                    this.paintTower(t);
                 });
             }
         });
@@ -925,11 +1248,12 @@ export class Game extends Scene
         this.waveGap = ms;
     }
 
-    //  Brief banner under the HUD when a tier trips.
-    flashHud (message: string)
+    //  Brief banner under the HUD when a tier trips, a wave escalates, or a
+    //  boss goes down.
+    flashHud (message: string, colour = '#ef4444')
     {
         const banner = this.add.text(512, 92, message, {
-            fontFamily: 'Arial Black', fontSize: 16, color: '#ef4444',
+            fontFamily: 'Arial Black', fontSize: 16, color: colour,
             backgroundColor: '#1a0d0d', padding: { x: 12, y: 6 }
         }).setOrigin(0.5).setDepth(11);
 
@@ -978,7 +1302,7 @@ export class Game extends Scene
         this.bullets.push({ obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed });
     }
 
-    nearestEnemy (x: number, y: number, range: number): Enemy | null
+    nearestEnemy (x: number, y: number, range: number, seesCloaked: boolean): Enemy | null
     {
         let best: Enemy | null = null;
         let bestDist = range;
@@ -986,6 +1310,7 @@ export class Game extends Scene
         for (const e of this.enemies)
         {
             if (!e.alive) continue;
+            if (e.cloaked && !seesCloaked) continue;
 
             const d = PhaserMath.Distance.Between(x, y, e.obj.x, e.obj.y);
             if (d <= bestDist)
@@ -1016,6 +1341,19 @@ export class Game extends Scene
 
         const dt = delta / 1000;
 
+        this.updateWaveText();
+
+        //  Shinobi cloak on their own clock. cloakAt of 0 means "already
+        //  cloaked", uncloakAt of 0 means "not cloaked", so mobs that never
+        //  cloak (flood, flyers) sit at 0/0 and are skipped by both branches.
+        for (const e of this.enemies)
+        {
+            if (!e.alive) continue;
+
+            if (e.cloakAt > 0 && this.time.now >= e.cloakAt) this.cloakDash(e);
+            else if (e.uncloakAt > 0 && this.time.now >= e.uncloakAt) this.uncloak(e);
+        }
+
         //  Flyers move themselves — no path, so this is their whole AI.
         for (const e of this.enemies)
         {
@@ -1043,7 +1381,7 @@ export class Game extends Scene
         {
             if (!e.alive) continue;
 
-            const by = e.obj.y - (e.flying ? 26 : 18);
+            const by = e.obj.y - e.barOffset;
             e.barBg.setPosition(e.obj.x, by);
             e.bar.setPosition(e.obj.x - e.barW / 2, by);
             e.bar.width = e.barW * (e.hp / e.maxHp);
@@ -1061,7 +1399,7 @@ export class Game extends Scene
             t.cooldown -= delta;
             if (t.cooldown > 0) continue;
 
-            const target = this.nearestEnemy(t.x, t.y, t.spec.range);
+            const target = this.nearestEnemy(t.x, t.y, t.spec.range, t.spec.seesCloaked);
             if (!target) continue;
 
             t.cooldown = t.spec.rate * penalty;
@@ -1107,14 +1445,22 @@ export class Game extends Scene
         if (enemy.hp <= 0)
         {
             const { x, y } = enemy.obj;
-            const flying = enemy.flying;
+            const { flying, boss } = enemy;
             this.killEnemy(enemy, true);
 
-            const pop = this.add.circle(x, y, flying ? 12 : 6, flying ? VIOLET : ACCENT).setDepth(6);
+            const radius = boss ? 26 : flying ? 12 : 6;
+            const pop = this.add.circle(x, y, radius, flying ? VIOLET : ACCENT).setDepth(6);
             this.tweens.add({
-                targets: pop, scale: 3, alpha: 0, duration: flying ? 340 : 220,
+                targets: pop, scale: 3, alpha: 0, duration: boss ? 500 : flying ? 340 : 220,
                 onComplete: () => pop.destroy()
             });
+
+            //  Killing a tank is the biggest thing that happens in a run.
+            if (boss)
+            {
+                this.cameras.main.shake(260, 0.008);
+                this.flashHud(`LEATHERBACK DOWN  ·  +$${this.bounty * TANK_BOUNTY_MULT}`, '#22c55e');
+            }
             return;
         }
 
@@ -1137,60 +1483,67 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 20, color: '#e6edf3'
         }).setDepth(10);
 
-        this.add.text(16, 40, 'DATA HALL 1  ·  AZ-C', {
+        this.add.text(16, 40, 'DATA HALL 1  ·  AZ-C  ·  ESC MENU', {
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setDepth(10);
 
-        this.budgetText = this.add.text(1014, 12, `$${this.budget}`, {
-            fontFamily: 'Arial Black', fontSize: 22, color: '#ff9900'
+        this.budgetText = this.add.text(1014, 4, `$${this.budget}`, {
+            fontFamily: 'Arial Black', fontSize: 20, color: '#ff9900'
         }).setOrigin(1, 0).setDepth(10);
 
-        this.makePicker('shield', 728, '1');
-        this.makePicker('waf', 872, '2');
-        this.select('shield');
+        //  Three build buttons filling the right-hand end of the band.
+        this.makePicker('iam', 686, '1');
+        this.makePicker('shield', 816, '2');
+        this.makePicker('waf', 946, '3');
+        this.refreshPickers();
 
-        this.waveText = this.add.text(512, 12, 'WAVE 1  ·  DDoS FLOOD', {
-            fontFamily: 'Arial', fontSize: 16, color: '#8ea3b8'
+        this.waveText = this.add.text(430, 10, 'WAVE 1', {
+            fontFamily: 'Arial', fontSize: 15, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.integrityText = this.add.text(512, 34, 'INTEGRITY 100%', {
+        this.integrityText = this.add.text(430, 30, 'INTEGRITY 100%', {
             fontFamily: 'Arial Black', fontSize: 14, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.add.text(512, 52, 'click a slot to build  ·  click a tower to sell  ·  ESC menu', {
+        this.add.text(430, 48, 'click a slot to build  ·  click a tower to sell', {
             fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.statusText = this.add.text(300, 14, 'HEALTHY', {
+        this.statusText = this.add.text(216, 14, 'HEALTHY', {
             fontFamily: 'Arial Black', fontSize: 16, color: '#22c55e'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.latencyText = this.add.text(300, 40, `p99 ${BASE_LATENCY}ms`, {
+        this.latencyText = this.add.text(216, 40, `p99 ${BASE_LATENCY}ms`, {
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
     }
 
-    //  One HUD build button. Clicking it, or pressing its number, arms that
-    //  tower for the next pad click.
+    //  One HUD build button. Clicking it, or pressing its number, buys the
+    //  tower if locked and otherwise arms it for the next pad click.
     makePicker (kind: TowerKind, x: number, key: string)
     {
         const spec = TOWER_SPECS[kind];
 
-        const box = this.add.rectangle(x, 32, 132, 40)
-            .setStrokeStyle(1, spec.colour, 0.35)
+        const box = this.add.rectangle(x, 41, 122, 38)
+            .setStrokeStyle(1, PAD_LINE, 0.9)
             .setDepth(10)
             .setInteractive({ useHandCursor: true });
 
-        const text = this.add.text(x, 25, `${key}  ${spec.name}  $${spec.cost}`, {
-            fontFamily: 'Arial Black', fontSize: 12, color: '#5c728a'
+        //  Same emplacement art as the board, shrunk to a button icon.
+        const icon = this.add.image(x - 46, 41, spec.texture).setScale(0.46).setDepth(11);
+
+        const text = this.add.text(x + 10, 34, `${key}  ${spec.name}  $${spec.cost}`, {
+            fontFamily: 'Arial Black', fontSize: 11, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
 
-        this.add.text(x, 41, `${spec.damage} dmg  ·  ${(1000 / spec.rate).toFixed(1)}/s`, {
+        const stats = `${spec.damage} dmg  ·  ${(1000 / spec.rate).toFixed(1)}/s`;
+
+        const sub = this.add.text(x + 10, 49, stats, {
             fontFamily: 'Arial', fontSize: 10, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
 
-        box.on('pointerdown', () => this.select(kind));
+        box.on('pointerdown', () => this.pick(kind));
 
-        this.pickers[kind] = { box, text };
+        this.pickers[kind] = { box, icon, text, sub, stats };
     }
 }

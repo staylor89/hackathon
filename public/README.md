@@ -113,3 +113,25 @@ Palette:
 | Seam    | #22d3ee |
 | Limbs   | #c95ae0 |
 | Outline | #2b0a2e |
+
+## Leatherback tank
+
+Slow and very tanky. Leathery carapace with no scutes: seven longitudinal keels
+converging on a pointed tail, pale speckles across the hide, huge front
+flippers sweeping forward and a stubby rear pair.
+
+- Key: tortoise-tank
+- Canvas is 96 x 96 (not 64) with the body about 80 x 80 centred, 8px margin.
+  Draw it at about 80px in game so it outweighs the 48px mobs.
+- Outline 4px, scaled up for the larger canvas. Centre of mass at canvas centre.
+- The converging keels fix the facing; nothing in the art implies up.
+
+Palette:
+
+| Role    | Hex     |
+|---------|---------|
+| Hide    | #8fa2c9 |
+| Keels   | #43567f |
+| Spots   | #d8e2f5 |
+| Flipper | #7c90bd |
+| Outline | #1e2740 |

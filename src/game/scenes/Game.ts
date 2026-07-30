@@ -26,19 +26,34 @@ const RACK_LIP = 0x27384f;
 const VIOLET = 0xa855f7;
 const ICE = 0x67e8f9;
 
+//  ── Wave schedule ────────────────────────────────────────────────────────
+//  Flyers wait until wave 6, and the constraint is the economy rather than the
+//  difficulty curve: with a realistic spend on ground defence the player cannot
+//  field a WAF (unlock + build) until about here, and WAF is the only answer to
+//  a flyer. Wave 6 also sits clear of the wave-5 boss, so the two introductions
+//  do not collide.
+//
+//  Declared up here, away from the rest of the flyer constants, because the
+//  tower table below derives WAF's availability wave from it.
+const INJECT_FIRST_WAVE = 6;
+
 //  ── Towers ───────────────────────────────────────────────────────────────
 //  IAM: the starter. Cheap, middling everything, and the only tower that can
 //  target a cloaked shinobi — identity checks see through the disguise.
 //  SHIELD: rapid fire, tiny per-shot damage. Built to shred swarms, poor
 //  against anything with real HP.
-//  WAF: slow, expensive, huge per-shot damage, and the only tower that can
-//  engage a flyer at all — everything else is ground fire. That makes it
-//  mandatory rather than optional from the first SQLi wave onward. Wasted on
-//  the DDoS swarm, because most of each shot is overkill.
+//  WAF: the interceptor. Slow, heavy per-shot damage, and the only tower that
+//  can engage a flyer — but it engages nothing else, so it is dead weight until
+//  the first SQLi wave and mandatory from then on. Inspecting request payloads
+//  is a different job from guarding the trench.
 //  SNOWMOBILE: the late-game money sink. Fires an instant ice lance instead
 //  of a bullet — enormous damage, once every few seconds, and it punches
 //  through everything standing in the line, so it pays off best aimed down a
 //  long straight of the trench. Terrible value against anything it one-shots.
+//
+//  Every tower targets exactly one class, ground or air, and the split is the
+//  spine of the roster: air defence and ground defence are separate purchases
+//  and neither budget covers the other.
 //
 //  unlock is a one-off purchase per run before the tower can be built at all.
 //  IAM starts unlocked so wave 1 is always playable. Unlocks are account-wide:
@@ -50,6 +65,7 @@ interface TowerSpec {
     texture: string;          // 64x64 emplacement art, drawn at scale 1
     name: string;             // shown in the HUD picker
     unlock: number;           // one-off cost to make it buildable
+    availableFrom?: number;   // earliest wave the unlock can be bought at all
     cost: number;             // per-tower build cost
     range: number;
     rate: number;             // ms between shots
@@ -58,7 +74,10 @@ interface TowerSpec {
     shot: string;             // projectile art, drawn at scale 1
     shotFacing: boolean;      // rotate the shot to its heading, or leave radial
     seesCloaked: boolean;
-    hitsFlying: boolean;      // can engage airborne mobs at all — see canEngage()
+    //  Which class of mob this tower can engage. Deliberately one field with two
+    //  values rather than a pair of booleans: a tower that targets neither is
+    //  not a balance choice, it is a bug, and this way it cannot be written.
+    targets: 'ground' | 'air';
     beam?: boolean;           // hits instantly along a line instead of firing a bullet
     colour: number;
     hex: string;
@@ -72,14 +91,14 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     iam: {
         kind: 'iam', texture: 'tower-iam', name: 'IAM',
         unlock: 0, cost: 70, range: 120, rate: 340, damage: 9,
-        bulletSpeed: 700, shot: 'shot-iam', shotFacing: true, seesCloaked: true, hitsFlying: false,
+        bulletSpeed: 700, shot: 'shot-iam', shotFacing: true, seesCloaked: true, targets: 'ground',
         colour: CYAN, hex: '#38bdf8',
         fireSfx: 'sfx-iam-fire', fireGap: 70, fireVolume: 0.85
     },
     shield: {
         kind: 'shield', texture: 'tower-shield', name: 'SHIELD',
         unlock: 200, cost: 120, range: 130, rate: 120, damage: 4,
-        bulletSpeed: 780, shot: 'shot-shield', shotFacing: true, seesCloaked: false, hitsFlying: false,
+        bulletSpeed: 780, shot: 'shot-shield', shotFacing: true, seesCloaked: false, targets: 'ground',
         colour: ACCENT, hex: '#ff9900',
         //  Fires every 120ms per tower and there can be a dozen of them, so the
         //  gap is most of the fire rate: at full board only about 1 shot in 6
@@ -94,10 +113,16 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
         //  from 155 because the binding constraint against a crossing flyer is
         //  how long it stays in the circle, not damage per shot — and range buys
         //  that without raising DPS against the trench.
-        unlock: 250, cost: 200, range: 170, rate: 850, damage: 30,
+        //
+        //  Hidden until the wave before flyers arrive. WAF cannot shoot at the
+        //  trench, so bought any earlier it is $450 of tower that physically
+        //  cannot fire — a trap, not a decision. Derived from INJECT_FIRST_WAVE
+        //  rather than hardcoded so the two cannot drift apart.
+        unlock: 250, availableFrom: INJECT_FIRST_WAVE - 1,
+        cost: 200, range: 170, rate: 850, damage: 30,
         //  The only tower that can touch a flyer. Inspecting request payloads is
         //  the one thing in the roster that does not care what carried them.
-        bulletSpeed: 620, shot: 'shot-waf', shotFacing: true, seesCloaked: false, hitsFlying: true,
+        bulletSpeed: 620, shot: 'shot-waf', shotFacing: true, seesCloaked: false, targets: 'air',
         colour: VIOLET, hex: '#a855f7',
         fireSfx: 'sfx-waf-fire', fireGap: 60, fireVolume: 1
     },
@@ -107,7 +132,7 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
         //  Beam towers hit instantly, so bulletSpeed goes unused and the slug is
         //  decoration thrown down the lance after the damage has landed.
         bulletSpeed: 0, shot: 'shot-snowmobile', shotFacing: true, seesCloaked: false,
-        hitsFlying: false, beam: true,
+        targets: 'ground', beam: true,
         colour: ICE, hex: '#67e8f9',
         //  A 980ms cryo discharge on a 4s cooldown: 200ms of charge, a crack,
         //  then the frozen tail. Loudest thing on the board by design. The gap
@@ -149,7 +174,8 @@ const refund = (spec: TowerSpec) => Math.floor(spec.cost * SELL_RATE);
 //  throws smoke and dashes — cloaked, so only IAM can shoot it, and moving at
 //  several times its normal speed. Present in every wave from wave 1.
 const NINJA_SPEED = 88;       // px/sec along the trench
-const NINJA_HP = 26;          // +7 per wave
+const NINJA_HP = 26;
+const NINJA_HP_GROWTH = 8;    // per wave after the first
 const NINJA_DAMAGE = 4;
 const NINJA_SCALE = 0.72;     // README asks for ~48px on screen
 const NINJA_BOUNTY_MULT = 2;
@@ -164,7 +190,8 @@ const NINJA_SPACING = 1500;   // ms between shinobi inside a wave
 
 //  DDoS: small, fragile, arrives in a flood. Individually harmless.
 const DDOS_SPEED = 115;       // px/sec along the trench
-const DDOS_HP = 12;           // +3 per wave
+const DDOS_HP = 12;
+const DDOS_HP_GROWTH = 4;     // per wave after the first
 const DDOS_DAMAGE = 3;        // integrity lost if it reaches the origin
 const DDOS_SCALE = 0.34;      // tortoise-ddos.png is 64x64 → ~22px on screen
 const DDOS_BOUNTY = 8;
@@ -188,19 +215,16 @@ const INJECT_SPREAD = 78;     // degrees of random heading either side of "towar
 const INJECT_TURN_MIN = 220;  // ms before it picks a new heading
 const INJECT_TURN_MAX = 640;
 
-//  Flyers wait until wave 6, and the constraint is the economy rather than the
-//  difficulty curve: with a realistic spend on ground defence the player cannot
-//  field a WAF (unlock + build) until about here, and WAF is now the only answer
-//  to a flyer. Wave 6 also sits clear of the wave-5 boss, so the two
-//  introductions do not collide.
-const INJECT_FIRST_WAVE = 6;
+//  INJECT_FIRST_WAVE is declared with the wave schedule above, because the tower
+//  table needs it.
 const INJECT_SPACING = 2200;  // ms between flyers inside a wave
 
 //  Leatherback tank: the boss. Crawls, soaks an enormous amount of damage, and
 //  takes a quarter of the origin with it if it lands. Every fifth wave only.
 const TANK_EVERY = 5;         // boss wave cadence
 const TANK_SPEED = 30;        // px/sec — a crawl; nearly a minute end to end
-const TANK_HP = 420;          // +140 per wave
+const TANK_HP = 420;
+const TANK_HP_GROWTH = 165;   // per wave after the first
 const TANK_DAMAGE = 25;       // integrity lost if it reaches the origin
 const TANK_SCALE = 0.84;      // 96x96 art → ~80px on screen, per the README
 const TANK_BOUNTY_MULT = 12;
@@ -210,8 +234,8 @@ const DDOS_FIRST_WAVE = 2;    // the flood joins in wave 2
 const SWARM_BASE = 6;         // mobs in the first flood wave
 const SWARM_GROWTH = 2;       // extra mobs per wave
 const SWARM_SPACING = 260;    // ms between mobs inside a wave
-const WAVE_GAP = 10000;       // ms of quiet between waves
-const PREP_MS = 15000;        // build phase before wave 1 lands
+const WAVE_GAP = 8500;        // ms of quiet between waves
+const PREP_MS = 12000;        // build phase before wave 1 lands
 
 //  Where the flyers are headed — the front face of the origin rack. Every hall
 //  has its origin against the right edge; only the row changes.
@@ -1279,12 +1303,32 @@ export class Game extends Scene
 
     //  Clicking a HUD button buys the tower if it is still locked, otherwise
     //  just arms it. Unlocks apply to every region.
+    //  Has this tower's arrival wave come round yet?
+    available (spec: TowerSpec)
+    {
+        return this.wave >= (spec.availableFrom ?? 0);
+    }
+
     pick (kind: TowerKind)
     {
         if (this.over) return;
 
+        const spec = TOWER_SPECS[kind];
+
+        //  The wave gate guards the purchase only, not use. Anything already
+        //  owned stays usable however it was acquired, which keeps the debug
+        //  unlock-all honest instead of handing over a tower that cannot be
+        //  selected.
         if (!this.unlocked[kind])
         {
+            if (!this.available(spec))
+            {
+                //  Not a money problem, so do not flash the budget red at them.
+                this.sfx('sfx-place-denied', { minGap: 200 });
+                this.flashHud(`${spec.name} AVAILABLE FROM WAVE ${spec.availableFrom}`, spec.hex);
+                return;
+            }
+
             this.unlockTower(kind);
             return;
         }
@@ -1296,6 +1340,10 @@ export class Game extends Scene
     unlockTower (kind: TowerKind)
     {
         const spec = TOWER_SPECS[kind];
+
+        //  pick() already gated this; belt and braces for any future caller that
+        //  charges the player for an unlock.
+        if (!this.available(spec)) return;
 
         if (this.budget < spec.unlock)
         {
@@ -1348,7 +1396,13 @@ export class Game extends Scene
                 picker.box.setFillStyle(BG, 0);
                 picker.icon.setAlpha(0.3).setTint(OFFLINE);
                 picker.text.setColor('#5c728a');
-                picker.sub.setText(`UNLOCK $${spec.unlock}`).setColor('#8ea3b8');
+
+                //  Three states, not two: a tower whose wave has not come round
+                //  advertises the wave rather than a price it cannot accept.
+                picker.sub
+                    .setText(this.available(spec) ? `UNLOCK $${spec.unlock}` : `FROM WAVE ${spec.availableFrom}`)
+                    .setColor(this.available(spec) ? '#8ea3b8' : '#5c728a');
+
                 this.fitText(picker.sub, PICKER_TEXT_W);
                 continue;
             }
@@ -1376,6 +1430,10 @@ export class Game extends Scene
         if (this.provisionAt > 0) this.provisionRegion();
 
         this.wave++;
+
+        //  Towers gated on a wave become buyable purely by the counter moving,
+        //  with no purchase to trigger a repaint, so the buttons need telling.
+        this.refreshPickers();
 
         //  Shinobi are the constant; the flood and the flyers layer on top as
         //  the run goes on.
@@ -1542,7 +1600,7 @@ export class Game extends Scene
     {
         if (this.over) return;
 
-        const maxHp = NINJA_HP + (this.wave - 1) * 7;
+        const maxHp = NINJA_HP + (this.wave - 1) * NINJA_HP_GROWTH;
         const start = region.route.getStartPoint();
         const obj = this.add.follower(region.route, start.x, start.y, 'tortoise-default')
             .setDepth(6)
@@ -1578,7 +1636,7 @@ export class Game extends Scene
     {
         if (this.over) return;
 
-        const maxHp = TANK_HP + (this.wave - 1) * 140;
+        const maxHp = TANK_HP + (this.wave - 1) * TANK_HP_GROWTH;
         const start = region.route.getStartPoint();
         const obj = this.add.follower(region.route, start.x, start.y, 'tortoise-tank')
             .setDepth(5)
@@ -1674,7 +1732,7 @@ export class Game extends Scene
     {
         if (this.over) return;
 
-        const maxHp = DDOS_HP + (this.wave - 1) * 3;
+        const maxHp = DDOS_HP + (this.wave - 1) * DDOS_HP_GROWTH;
         const start = region.route.getStartPoint();
         const obj = this.add.follower(region.route, start.x, start.y, 'tortoise-ddos')
             .setDepth(5)
@@ -2226,11 +2284,17 @@ export class Game extends Scene
     {
         if (!e.alive) return false;
 
-        //  Smoke-dashing shinobi are only visible to identity checks.
-        if (e.cloaked && !spec.seesCloaked) return false;
+        //  Ground and air are mutually exclusive in both directions: WAF cannot
+        //  touch the trench and nothing else can touch a flyer. A tower with the
+        //  wrong target class does not shoot at all rather than shooting for
+        //  reduced damage — the whole point is that the two defences are
+        //  separate purchases.
+        if ((e.flying ? 'air' : 'ground') !== spec.targets) return false;
 
-        //  Airborne mobs ignore the trench entirely, and only WAF reaches them.
-        if (e.flying && !spec.hitsFlying) return false;
+        //  Smoke-dashing shinobi are only visible to identity checks. Checked
+        //  after the class test, since a cloaked flyer would be unreachable for
+        //  two independent reasons and the class one is the interesting answer.
+        if (e.cloaked && !spec.seesCloaked) return false;
 
         return true;
     }
@@ -2800,9 +2864,16 @@ export class Game extends Scene
         //  Same emplacement art as the board, shrunk to a button icon.
         const icon = this.add.image(x - 43, 40, spec.texture).setScale(0.4).setDepth(11);
 
+        //  Air towers are tagged and ground ones are not. Ground is the default
+        //  case and tagging all four would just be noise; what a player needs to
+        //  know is which one does not shoot at the trench, because a tower that
+        //  ignores everything on screen reads as broken rather than as
+        //  specialised. Still shorter than SNOWMOBILE, so it costs no room.
+        const label = spec.targets === 'air' ? `${spec.name}  ·  AIR` : spec.name;
+
         //  Text sits in the 80px right of the icon. SNOWMOBILE is wider than
         //  that, so both lines are fitted rather than trusted to fit.
-        const text = this.add.text(x + 14, 31, spec.name, {
+        const text = this.add.text(x + 14, 31, label, {
             fontFamily: 'Arial Black', fontSize: 10, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
 

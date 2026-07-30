@@ -6,6 +6,12 @@ You are not expected to know Phaser. You are not expected to know Node. You are 
 
 At T+2hr we demo by screen-share. Show whatever you built.
 
+## Our team's plan
+
+MVP is one tower (**AWS Shield**) vs one attack (a **DDoS swarm** of tortoises), with every stat in a data-driven config so adding the next AWS-service-vs-attack pairing is a ~10-line diff. The work splits into three parallel streams (core engine / entities & combat / UI) with disjoint file ownership and an event-bus contract between them.
+
+Full plan lives in [`docs/plan/`](./docs/plan/00-overview.md): read the [overview](./docs/plan/00-overview.md) and the [shared contracts](./docs/plan/01-contracts.md), then pick up your stream brief ([core](./docs/plan/02-stream-core.md) / [entities](./docs/plan/03-stream-entities.md) / [UI](./docs/plan/04-stream-ui.md)).
+
 ## How it works
 
 1. **Fork** this repo on GitHub. Your group works in your fork.

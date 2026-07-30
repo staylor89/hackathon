@@ -30,7 +30,9 @@ export class GameOver extends Scene
         for (let x = 0; x <= 1024; x += 64) g.lineBetween(x, 0, x, 768);
         for (let y = 0; y <= 768; y += 64) g.lineBetween(0, y, 1024, y);
 
-        this.add.text(512, 300, 'REGION DOWN', {
+        //  One origin serves every region, so losing it is not a regional
+        //  incident any more.
+        this.add.text(512, 300, 'GLOBAL OUTAGE', {
             fontFamily: 'Arial Black', fontSize: 80, color: '#ff9900'
         }).setOrigin(0.5);
 

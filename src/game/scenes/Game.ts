@@ -39,8 +39,8 @@ const ICE = 0x67e8f9;
 //  long straight of the trench. Terrible value against anything it one-shots.
 //
 //  unlock is a one-off purchase per run before the tower can be built at all.
-//  IAM starts unlocked so wave 1 is always playable. Unlocks are region-wide:
-//  buying SHIELD once makes it buildable in every data hall.
+//  IAM starts unlocked so wave 1 is always playable. Unlocks are account-wide:
+//  buying SHIELD once makes it buildable in every region.
 type TowerKind = 'iam' | 'shield' | 'waf' | 'snowmobile';
 
 interface TowerSpec {
@@ -188,29 +188,33 @@ const PREP_MS = 15000;        // build phase before wave 1 lands
 const ORIGIN_X = 960;
 
 //  ── Regions ──────────────────────────────────────────────────────────────
-//  A region is a data hall: its own trench, its own pads, its own towers, its
-//  own intruders. What it does NOT have of its own is money, origin integrity,
-//  score, tower unlocks or the wave clock — one wallet and one origin server
-//  behind every hall, which is the whole point of the mechanic.
+//  A region is a whole AWS region: its own data hall, its own trench, its own
+//  pads, towers and intruders. What it does NOT have of its own is money,
+//  origin integrity, score, tower unlocks or the wave clock — one account and
+//  one origin server behind every region, which is the whole point of the
+//  mechanic.
 //
-//  A new hall is provisioned in the gap after every tenth wave, and from then
-//  on every wave lands in full in every hall at once. Only one is on screen at
-//  a time (TAB, or click the tab strip); the ones you are not watching keep
-//  simulating, so a breach over there costs exactly as much.
+//  A new region is provisioned in the gap after every tenth wave, and from
+//  then on every wave lands in full in every region at once. Only one is on
+//  screen at a time (TAB, or click the tab strip); the ones you are not
+//  watching keep simulating, so a breach over there costs exactly as much.
 const REGION_EVERY = 10;      // waves between provisions
-const REGION_PREP = 12000;    // extra ms of quiet in the gap a hall opens in
-const REGION_ALERT_MS = 900;  // how long a breach lights up a hall's tab
+const REGION_PREP = 12000;    // extra ms of quiet in the gap a region opens in
+const REGION_ALERT_MS = 900;  // how long a breach lights up a region's tab
 const MAX_REGIONS = 4;        // one per layout, and the tab strip fits four
 
-//  AZ-C, AZ-D, AZ-E, ... — the region's availability zones, in the order they
-//  come online.
-const hallName = (index: number) => `AZ-${String.fromCharCode(67 + index)}`;
+//  The tortoise fleet, in the order it comes online. eu-tort-3 is home; the
+//  expansions are the rest of the family, none of them on the status page
+//  either.
+const REGION_NAMES = ['EU-TORT-3', 'US-SHELL-1', 'SA-GALAP-1', 'AP-KAME-2'];
 
 //  Region tab strip: sits in the HUD band, above the build buttons and left of
 //  the budget readout.
 const TAB_X = 536;
 const TAB_Y = 10;
-const TAB_W = 58;
+//  Wide enough for "SA-GALAP-1" plus an intruder count at fontSize 10; the
+//  strip still ends well short of the budget readout in the top-right corner.
+const TAB_W = 84;
 const TAB_H = 16;
 const TAB_GAP = 4;
 
@@ -667,7 +671,7 @@ export class Game extends Scene
 
         const region: Region = {
             index,
-            name: hallName(index),
+            name: REGION_NAMES[index % REGION_NAMES.length],
             layout, layer, route, integrityBar,
             towers: [], enemies: [], bullets: [], pads: [],
             alertUntil: 0,
@@ -746,14 +750,14 @@ export class Game extends Scene
         this.showRegion(region.index);
 
         this.sfx('sfx-region-up');
-        this.flashHud(`${region.name} ONLINE  ·  DATA HALL ${region.index + 1}  ·  TAB TO SWITCH`, '#38bdf8');
+        this.flashHud(`NEW REGION ONLINE  ·  ${region.name}  ·  TAB TO SWITCH`, '#38bdf8');
         this.cameras.main.flash(260, 56, 189, 248);
     }
 
     // ── Region tabs ──────────────────────────────────────────────────────
 
-    //  One tab per hall, hidden while there is only one. Shows the hall name
-    //  and how many intruders are in it, goes red for a moment on a breach.
+    //  One tab per region, hidden while there is only one. Shows the region
+    //  name and how many intruders are in it, goes red for a moment on a breach.
     makeTab (region: Region)
     {
         const x = TAB_X + region.index * (TAB_W + TAB_GAP);
@@ -1315,7 +1319,7 @@ export class Game extends Scene
         if (flood > 0) parts.push(`DDoS x${flood}`);
         if (flyers > 0) parts.push(`SQLi x${flyers}`);
         if (tanks > 0) parts.push(`TANK x${tanks}`);
-        if (this.regions.length > 1) parts.push(`IN ${this.regions.length} HALLS`);
+        if (this.regions.length > 1) parts.push(`IN ${this.regions.length} REGIONS`);
         this.waveLabel = `WAVE ${this.wave}  ·  ${parts.join('  ·  ')}`;
 
         if (tanks > 0)
@@ -1810,7 +1814,7 @@ export class Game extends Scene
             { at: 40, run: () => { this.killPowerDomain(1); this.spikeMs = 4000; } },
             { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(5500); } },
             { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
-            { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(3500); this.flashHud('REGION FAILING'); } }
+            { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(3500); this.flashHud('ORIGIN FAILING'); } }
         ];
 
         //  tiersHit counts how many have fired, so each one runs exactly once
@@ -2395,14 +2399,14 @@ export class Game extends Scene
 
     }
 
-    //  Bottom HUD line: which hall you are looking at, then every key binding.
-    //  Rewritten on mute and on every region switch.
+    //  Bottom HUD line: which region you are looking at, then every key
+    //  binding. Rewritten on mute and on every region switch.
     showHint ()
     {
         const region = this.regions[this.active];
-        const hall = region ? `DATA HALL ${region.index + 1}  ·  ${region.name}  ·  ` : '';
+        const where = region ? `${region.name}  ·  ` : '';
 
-        this.hintText.setText(`${hall}${HINT}${this.sound.mute ? '  ·  MUTED' : ''}`);
+        this.hintText.setText(`${where}${HINT}${this.sound.mute ? '  ·  MUTED' : ''}`);
         this.fitText(this.hintText, HINT_W);
     }
 

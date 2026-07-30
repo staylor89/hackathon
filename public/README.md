@@ -135,3 +135,31 @@ Palette:
 | Spots   | #d8e2f5 |
 | Flipper | #7c90bd |
 | Outline | #1e2740 |
+
+## Towers
+
+Four 64 x 64 top-down emplacements, each a service device on a 50 x 50 slate
+baseplate with corner bolts. Towers do not rotate, so the layouts are symmetric
+and imply no facing. AWS orange #ff9900 is reserved for towers and UI - no mob
+uses it.
+
+| Key              | Service    | Counters                        | Motif |
+|------------------|------------|---------------------------------|-------|
+| tower-iam        | IAM        | default mob / swarms            | keyhole turret |
+| tower-waf        | WAF        | flyers, injection tortoise      | wall courses + scanning emitter |
+| tower-shield     | Shield     | fast movers, default mob        | pulse plate + shield boss |
+| tower-snowmobile | Snowmobile | tanks, slow mobs                | 45ft container rig, orange cab |
+
+Palette:
+
+| Role      | Hex     |
+|-----------|---------|
+| Baseplate | #3b4a63 |
+| Inner pad | #2a374d |
+| Metal     | #8fa0b8 |
+| Orange    | #ff9900 |
+| Orange dk | #c86f00 |
+| Outline   | #0a1120 |
+
+Snowmobile is the only non-round silhouette, deliberately - it should read as
+hardware, not a turret, at a glance.

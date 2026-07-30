@@ -50,7 +50,7 @@ this.add.image(512, 384, 'tortoise');
 
 ## Sound and music
 
-All audio is synthesised, not sourced. `npm run sfx` writes the one-shots and `npm run music` writes the two loops, both into `public/assets/sfx/`; shared DSP primitives live in `tools/dsp.mjs`. Recipes live in the generator scripts, so re-tuning audio never touches TypeScript. Files are 44.1 kHz mono 16-bit WAV rather than MP3, because encoder padding puts 10-30ms of silence in front of every MP3 — a quarter of Shield's fire interval, and an audible hiccup on every pass of a loop.
+Audio is generated, not hand-edited: `npm run sfx` writes the synthesised one-shots, `npm run music` the two loops, and `npm run clips` processes the handful of sourced recordings in `tools/source-audio/`. All three write into `public/assets/sfx/`; shared DSP lives in `tools/dsp.mjs`. Each output filename is owned by exactly one script — never point two at the same name. Recipes live in the generator scripts, so re-tuning audio never touches TypeScript. Files are 44.1 kHz mono 16-bit WAV rather than MP3, because encoder padding puts 10-30ms of silence in front of every MP3 — a quarter of Shield's fire interval, and an audible hiccup on every pass of a loop.
 
 Never call `this.sound.play()` directly from gameplay code. Use `Game.sfx(key, opts)`, which throttles retriggers via `minGap` and detunes each play slightly. Without both, the board's 50+ shots a second mix into white noise. Firing throttles live on `TowerSpec` as `fireGap` alongside the balance numbers.
 

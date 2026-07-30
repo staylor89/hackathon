@@ -1,15 +1,21 @@
 # EU-Tort-3 audio
 
-Every file here is synthesised. Nothing is sampled or sourced, so there is no
-licence to track and the whole set is tunable in one place:
+Three generators, all writing here:
 
-    npm run sfx      # tools/make-sfx.mjs   — 22 one-shots
-    npm run music    # tools/make-music.mjs — 2 loops
+    npm run sfx      # tools/make-sfx.mjs   — 19 synthesised one-shots
+    npm run music    # tools/make-music.mjs — 2 synthesised loops
+    npm run clips    # tools/make-clips.mjs — 3 cuts of sourced recordings
 
-Shared synthesis primitives live in `tools/dsp.mjs`. Both scripts are seeded, so
+Shared DSP lives in `tools/dsp.mjs`. The two synth scripts are seeded, so
 regenerating produces byte-identical files. Edit a recipe in `SOUNDS` (one-shots)
 or a `core()` / `boss()` arrangement (music) and re-run; keys and filenames stay
 put, so audio can be re-tuned at any point without touching TypeScript.
+
+**The three generators must not fight over a filename.** Each output name is
+owned by exactly one script, which is why the sourced clips kept their own names
+(`i-like-turtles.wav`) rather than overwriting the synth files they replaced
+(`wave-start.wav`, since deleted). Keys are what the game binds to, so
+repointing a key at a different file is a one-line Preloader change.
 
 ## Format
 
@@ -56,6 +62,7 @@ satisfies that, so no manual unlock handling is needed.
 | `sfx-iam-fire` | `tower-iam-fire.wav` | 95ms | -17 dBFS | IAM shot. Clinical two-tone verify, deliberately unlike a projectile |
 | `sfx-shield-fire` | `tower-shield-fire.wav` | 70ms | -18 dBFS | Shield shot. Square blip sweeping 1900 to 430 Hz with a noise transient |
 | `sfx-waf-fire` | `tower-waf-fire.wav` | 110ms | -14 dBFS | WAF shot. Hard click into a saturated low thunk; a stamp, not a shot |
+| `sfx-snowmobile-fire` | `tower-snowmobile-fire.wav` | 980ms | -6 dBFS | Snowmobile beam. 200ms charge, a crack, then a cryo tail |
 | `sfx-tower-build` | `tower-build.wav` | 320ms | -12 dBFS | Tower placed. Rising 440 to 660 Hz over a mechanical knock |
 | `sfx-tower-sell` | `tower-sell.wav` | 240ms | -14 dBFS | Tower sold. Falling two-tone plus a coin tick |
 | `sfx-tower-unlock` | `tower-unlock.wav` | 440ms | -11 dBFS | Tower unlocked. Three-note rise; happens at most twice a run |
@@ -64,16 +71,45 @@ satisfies that, so no manual unlock handling is needed.
 | `sfx-enemy-death` | `enemy-death.wav` | 210ms | -16 dBFS | Mob killed. Noise collapsing 5200 to 420 Hz plus a body thump |
 | `sfx-boss-death` | `boss-death.wav` | 760ms | -11 dBFS | Leatherback down. Shell collapse into a low boom |
 | `sfx-ninja-dash` | `ninja-dash.wav` | 190ms | -22 dBFS | Both ends of a shinobi smoke dash |
-| `sfx-breach` | `breach.wav` | 240ms | -13 dBFS | Flood or shinobi reaches the origin. Dull, close, small |
-| `sfx-breach-heavy` | `breach-heavy.wav` | 560ms | -9 dBFS | Flyer or tank lands. Paired with the 320ms camera shake |
-| `sfx-wave-start` | `wave-start.wav` | 740ms | -12 dBFS | Wave inbound. Two-beat console alert |
-| `sfx-wave-boss` | `wave-boss.wav` | 980ms | -11 dBFS | Boss wave. Same shape an octave and a half down, with rumble |
+| `sfx-breach` | `turtle-mating-short.wav` | 340ms | -14 dBFS | Flood or shinobi reaches the origin. **Sourced clip** |
+| `sfx-breach-heavy` | `turtle-mating.wav` | 936ms | -9 dBFS | Flyer or tank lands. **Sourced clip**, full length |
+| `sfx-wave-start` | `i-like-turtles.wav` | 895ms | -5 dBFS | Wave inbound. **Sourced clip** |
+| `sfx-wave-boss` | `wave-boss.wav` | 980ms | -11 dBFS | Boss wave. Still synth — the boss alert was never the harsh beep |
 | `sfx-region-down` | `region-down.wav` | 1700ms | -10 dBFS | Integrity zero. Detuned saw pair falling 330 to 44 Hz |
 | `sfx-ui-click` | `ui-click.wav` | 28ms | -20 dBFS | Arming a build button |
 | `sfx-place-denied` | `place-denied.wav` | 170ms | -16 dBFS | Cannot afford a build or an unlock |
 
 Levels are deliberately uneven. Firing and hit sounds sit low because dozens
 overlap; the once-per-wave and once-per-run events get the headroom.
+
+## Sourced clips
+
+Three of the entries above are real recordings rather than synthesis. Sources
+are committed at `tools/source-audio/*.mp3` so the pipeline stays reproducible;
+`npm run clips` decodes, downmixes to mono, trims, levels and fades them into the
+same format as everything else.
+
+    i-like-turtles.mp3   -> i-like-turtles.wav          (whole clip, -5 dBFS)
+    turtle-mating.mp3    -> turtle-mating.wav           (whole clip, -9 dBFS)
+                         -> turtle-mating-short.wav     (first 0.34s, -14 dBFS)
+
+Two things differ from the synth one-shots when playing these back:
+
+**Throttles are longer than the clip.** A light breach fires per arriving packet
+and the flood spawns 260ms apart, so `sfx-breach` uses a 400ms gap against a
+340ms clip. Two overlapping thuds read as one bigger thud; two overlapping
+voice-like clips read as mush.
+
+**Pitch jitter is off or minimal.** `sfx-wave-start` uses `jitter: 0`, because
+detuning a recognisable line makes it sound like a warped tape rather than like
+variation. The breach clips take a reduced `0.03`.
+
+Decoding needs `afconvert`, which ships with macOS. There is no pure-Node MP3
+decoder in the toolchain and a dependency for three clips is not worth it; swap
+the `decode()` line for ffmpeg if this ever has to run on Linux.
+
+Licensing: both are found audio. Fine for an internal demo, not cleared for
+public distribution, so worth a thought before this is hosted anywhere.
 
 ## Music
 
@@ -125,11 +161,13 @@ scene and it would otherwise loop forever under the main menu.
     tower-glacier-fire.wav      300ms   -16 dBFS
     tower-lambda-fire.wav       290ms   -16 dBFS
     tower-guardduty-ping.wav    650ms   -18 dBFS
-    tower-snowmobile-fire.wav   720ms    -8 dBFS
 
 These are not in `Preloader` on purpose, since Web Audio decodes everything
 loaded there up front. If one of those towers lands, add a `load.audio` line and
-set `fireSfx` on its spec.
+set `fireSfx` on its spec — which is exactly what happened to the snowmobile.
 
-Note that `public/assets/tower-snowmobile.png` is likewise present but unloaded
-and unreferenced; there is no `snowmobile` entry in `TowerKind`.
+Its sound was originally a heavy artillery thud, written speculatively when the
+plan had it as a slow-firing cannon. It shipped as a **beam** tower instead
+(instant hit, 4s cooldown, icy cyan), so the recipe was rewritten as a charge and
+discharge. Worth remembering that a tower's sound encodes its mechanic, not just
+its name.

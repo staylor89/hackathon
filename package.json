@@ -20,7 +20,8 @@
     "build-nolog": "vite build --config vite/config.prod.mjs",
     "typecheck": "tsc --noEmit",
     "sfx": "node tools/make-sfx.mjs",
-    "music": "node tools/make-music.mjs"
+    "music": "node tools/make-music.mjs",
+    "clips": "node tools/make-clips.mjs"
   },
   "devDependencies": {
     "typescript": "~5.7.2",

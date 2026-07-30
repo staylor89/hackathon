@@ -99,10 +99,11 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
         //  decoration thrown down the lance after the damage has landed.
         bulletSpeed: 0, shot: 'shot-snowmobile', shotFacing: true, seesCloaked: false, beam: true,
         colour: ICE, hex: '#67e8f9',
-        //  720ms of discharge every 2.8s, so nothing needs throttling and it
-        //  can sit loud — one of these firing should be the loudest thing on
-        //  the board.
-        fireSfx: 'sfx-snowmobile-fire', fireGap: 0, fireVolume: 1
+        //  A 980ms cryo discharge on a 4s cooldown: 200ms of charge, a crack,
+        //  then the frozen tail. Loudest thing on the board by design. The gap
+        //  only exists to stop two of them landing in perfect sync, which reads
+        //  as one louder tower rather than two.
+        fireSfx: 'sfx-snowmobile-fire', fireGap: 300, fireVolume: 1
     }
 };
 
@@ -196,8 +197,10 @@ const HINT = 'DATA HALL 1  ·  AZ-C  ·  CLICK PAD BUILD  ·  CLICK TOWER SELL  
 const HINT_W = 500;          // fitText() budget — it must not reach the build buttons
 
 //  ── Music ────────────────────────────────────────────────────────────────
-//  Music loses every fight with a sound effect, so it sits well below them.
-const MUSIC_VOL = 0.5;
+//  Music sits under the effects, but not by much any more. The tracks peak at
+//  -14 dBFS in the file, so this still leaves the loudest one-shots (the
+//  snowmobile beam at -6, a heavy breach at -9) clearly on top.
+const MUSIC_VOL = 0.8;
 const MUSIC_FADE = 900;       // ms of crossfade between tracks
 
 //  Cable route: enemies walk from off-screen left to the origin server.
@@ -968,7 +971,10 @@ export class Game extends Scene
             //  Not a plain playMusic('music-core') — a tank from the last boss
             //  wave may well still be crawling, and it keeps its music.
             this.refreshMusic();
-            this.sfx('sfx-wave-start', { volume: 0.85 });
+
+            //  Sourced voice clip. jitter 0 because detuning a recognisable
+            //  line makes it sound like a warped tape, not like variation.
+            this.sfx('sfx-wave-start', { volume: 1, jitter: 0 });
         }
 
         this.time.addEvent({
@@ -1304,10 +1310,12 @@ export class Game extends Scene
         //  packet in the flood.
         const heavy = damage >= INJECT_DAMAGE;
 
-        //  The flood arrives 260ms apart, so a breach per packet would be a
-        //  drum roll. Heavy breaches are rare enough to always land.
-        if (heavy) this.sfx('sfx-breach-heavy');
-        else this.sfx('sfx-breach', { volume: 0.8, minGap: 150 });
+        //  Both are cuts of the same recording, which changes the throttling
+        //  from the synth thuds these replaced: two overlapping copies of a
+        //  voice-like clip read as mush, where two overlapping thuds just read
+        //  as a bigger thud. So each gap is longer than its own clip.
+        if (heavy) this.sfx('sfx-breach-heavy', { minGap: 1000, jitter: 0.03 });
+        else this.sfx('sfx-breach', { volume: 0.85, minGap: 400, jitter: 0.03 });
 
         this.cameras.main.shake(heavy ? 320 : 180, heavy ? 0.012 : 0.006);
         this.cameras.main.flash(120, 239, 68, 68);

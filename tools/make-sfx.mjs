@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
     RATE, rng, phasor, sine, square, saw, tri, lowpass, highpass, svf,
-    decay, glide, sat, render, normalise, declick, wav
+    decay, glide, sat, ad, render, normalise, declick, wav
 } from './dsp.mjs';
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'sfx');
@@ -133,23 +133,53 @@ const SOUNDS = {
         });
     } },
 
-    //  A 45-foot container arriving at 4 mph. Long low sweep, saturated noise
-    //  body, one bright transient so it still cuts on laptop speakers.
-    'tower-snowmobile-fire': { db: -8, brief: 'Snowmobile firing. Heavy artillery thud.', make: () =>
+    //  Snowmobile is a beam tower: 300 damage on a 4s cooldown, instant hit,
+    //  icy cyan. So this is a charge and a discharge, not an impact - the shape
+    //  is 200ms of rising whine, a crack, then a long cryo tail. It fires once
+    //  every four seconds and should be the loudest thing on the board, which
+    //  is the whole reason it can afford to be this long.
+    'tower-snowmobile-fire': { db: -6, brief: 'Snowmobile firing. Cryo beam: charge, crack, frozen tail.', make: () =>
     {
-        const nz = rng(404);
-        const ph = phasor();
-        const body = svf(1.1);
-        const crack = highpass(4000);
+        const CHARGE = 0.2;
 
-        return render(720, (t) =>
+        const nz = rng(404);
+        const whine = phasor();
+        const whine2 = phasor();
+        const sub = phasor();
+        const beam = svf(0.3);
+        const ice = svf(0.18);
+        const crack = highpass(5000);
+        const shimmer = phasor();
+
+        return render(980, (t) =>
         {
-            const f = glide(t, 380, 150, 36);
-            const boom = sine(ph(f)) * decay(t, 190);
-            const fc = glide(t, 220, 1900, 190);
-            const rumble = body(nz() * 2 - 1, fc).low * 0.75 * decay(t, 95);
-            const snap = crack(nz() * 2 - 1) * 0.35 * decay(t, 4);
-            return sat(boom * 1.1 + rumble + snap, 1.4);
+            //  Charge: two detuned saws sweeping up, amplitude ramping in.
+            const cf = glide(t, CHARGE * 1000, 220, 1750);
+            const ramp = Math.pow(Math.min(t / CHARGE, 1), 2);
+            const charge = t < CHARGE
+                ? (saw(whine(cf)) + saw(whine2(cf * 1.008))) * 0.22 * ramp
+                : 0;
+
+            if (t < CHARGE) return charge;
+
+            //  Everything past here is the discharge.
+            const d = t - CHARGE;
+
+            //  The crack that sells the release.
+            const snap = crack(nz() * 2 - 1) * 0.7 * decay(d, 6);
+
+            //  Beam body: resonant noise falling from bright to cold, over a
+            //  sub that gives it weight on real speakers.
+            const body = beam(nz() * 2 - 1, glide(d, 420, 3400, 640)).band * 0.85 * decay(d, 260);
+            const weight = sine(sub(glide(d, 300, 88, 42))) * 0.55 * decay(d, 190);
+
+            //  Frozen tail: high resonant shimmer sweeping up as it dies away,
+            //  plus a thin crystalline partial. This is the "cryo" rather than
+            //  "laser" part.
+            const frost = ice(nz() * 2 - 1, glide(d, 620, 2600, 6200)).band * 0.5 * decay(d, 300);
+            const ring = sine(shimmer(3140)) * 0.12 * ad(d, 90, 340);
+
+            return sat(snap + body + weight + frost + ring, 1.25);
         });
     } },
 
@@ -266,40 +296,6 @@ const SOUNDS = {
         });
     } },
 
-    //  A breach by the flood or a shinobi. Dull, close, unpleasant, but small -
-    //  this fires often enough that it cannot be a whole event.
-    'breach': { db: -13, brief: 'Integrity lost. Dull impact thud.', make: () =>
-    {
-        const ph = phasor();
-        const nz = rng(1111);
-        const body = lowpass(1200);
-
-        return render(240, (t) =>
-        {
-            const thud = sine(ph(glide(t, 140, 165, 62))) * decay(t, 70);
-            const grit = body(nz() * 2 - 1) * 0.4 * decay(t, 22);
-            return sat(thud * 1.1 + grit, 1.3);
-        });
-    } },
-
-    //  A flyer or a tank landing on the origin. Paired with a 320ms camera
-    //  shake, so it needs real weight and length behind it.
-    'breach-heavy': { db: -9, brief: 'Major breach. Heavy structural hit.', make: () =>
-    {
-        const ph = phasor();
-        const sub = phasor();
-        const nz = rng(1212);
-        const body = svf(1.0);
-
-        return render(560, (t) =>
-        {
-            const hit = sine(ph(glide(t, 260, 190, 44))) * decay(t, 150);
-            const deep = sine(sub(glide(t, 300, 92, 31))) * 0.7 * decay(t, 210);
-            const debris = body(nz() * 2 - 1, glide(t, 180, 2400, 260)).low * 0.6 * decay(t, 80);
-            return sat(hit + deep + debris, 1.5);
-        });
-    } },
-
     //  Leatherback down. The best thing that happens in a run, so it gets the
     //  longest tail of any kill sound.
     'boss-death': { db: -11, brief: 'Boss killed. Shell collapse into a low boom.', make: () =>
@@ -340,28 +336,6 @@ const SOUNDS = {
             }
             const floor = rumble(nz() * 2 - 1) * 2.2 * decay(t, 420);
             return sat(shape(v) + floor, 1.2);
-        });
-    } },
-
-    //  Wave incoming. Two-beat alert, band-limited so it reads as a console
-    //  alarm rather than a musical note.
-    'wave-start': { db: -12, brief: 'Wave incoming. Two-beat console alert.', make: () =>
-    {
-        const ph = phasor();
-        const shape = lowpass(2600);
-        const beeps = [ 0, 0.27 ];
-
-        return render(740, (t) =>
-        {
-            let v = 0;
-            for (const at of beeps)
-            {
-                if (t < at || t > at + 0.2) continue;
-                const dt = t - at;
-                const env = Math.min(dt / 0.008, 1) * Math.min((0.2 - dt) / 0.02, 1);
-                v += square(ph(680)) * 0.6 * env;
-            }
-            return shape(v);
         });
     } },
 

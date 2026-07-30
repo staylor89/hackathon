@@ -82,10 +82,13 @@ export class Preloader extends Scene
         this.load.audio('sfx-boss-death', 'assets/sfx/boss-death.wav');
         this.load.audio('sfx-ninja-dash', 'assets/sfx/ninja-dash.wav');
 
-        this.load.audio('sfx-breach', 'assets/sfx/breach.wav');
-        this.load.audio('sfx-breach-heavy', 'assets/sfx/breach-heavy.wav');
+        //  Breaches and the wave alert are sourced recordings, not synth — see
+        //  tools/make-clips.mjs. Light breaches get a 0.34s cut of the same
+        //  recording, because the flood arrives 260ms apart.
+        this.load.audio('sfx-breach', 'assets/sfx/turtle-mating-short.wav');
+        this.load.audio('sfx-breach-heavy', 'assets/sfx/turtle-mating.wav');
 
-        this.load.audio('sfx-wave-start', 'assets/sfx/wave-start.wav');
+        this.load.audio('sfx-wave-start', 'assets/sfx/i-like-turtles.wav');
         this.load.audio('sfx-wave-boss', 'assets/sfx/wave-boss.wav');
         this.load.audio('sfx-region-down', 'assets/sfx/region-down.wav');
 

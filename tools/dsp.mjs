@@ -147,6 +147,71 @@ export function fold (buf, loopSamples)
     return out;
 }
 
+//  Read a 16-bit PCM WAV into a Float32Array. Walks the chunk list rather than
+//  assuming a 44-byte header, because afconvert writes a FLLR padding chunk
+//  before the data.
+export function readWav (bytes)
+{
+    let off = 12;
+    let dataOff = -1;
+    let dataLen = 0;
+    let channels = 1;
+
+    while (off + 8 <= bytes.length)
+    {
+        const id = bytes.toString('ascii', off, off + 4);
+        const size = bytes.readUInt32LE(off + 4);
+
+        if (id === 'fmt ') channels = bytes.readUInt16LE(off + 10);
+        if (id === 'data') { dataOff = off + 8; dataLen = size; break; }
+
+        off += 8 + size + (size % 2);
+    }
+
+    if (dataOff < 0) throw new Error('no data chunk in WAV');
+
+    const frames = Math.floor(dataLen / 2 / channels);
+    const out = new Float32Array(frames);
+
+    //  Downmix if the decode handed back stereo.
+    for (let i = 0; i < frames; i++)
+    {
+        let v = 0;
+        for (let c = 0; c < channels; c++) v += bytes.readInt16LE(dataOff + (i * channels + c) * 2) / 32768;
+        out[i] = v / channels;
+    }
+
+    return out;
+}
+
+//  Trim to the first and last sample above a fraction of peak, with padding
+//  either side. Strips MP3 decoder padding and dead air without guesswork.
+export function trimSilence (buf, { threshold = 0.01, padMs = 8 } = {})
+{
+    let peak = 0;
+    for (const s of buf) peak = Math.max(peak, Math.abs(s));
+    if (peak === 0) return buf;
+
+    const gate = peak * threshold;
+    const pad = ms(padMs);
+
+    let first = 0;
+    while (first < buf.length && Math.abs(buf[first]) < gate) first++;
+
+    let last = buf.length - 1;
+    while (last > first && Math.abs(buf[last]) < gate) last--;
+
+    return buf.slice(Math.max(0, first - pad), Math.min(buf.length, last + pad));
+}
+
+export function slice (buf, startSec, endSec)
+{
+    return buf.slice(
+        Math.max(0, Math.round(startSec * RATE)),
+        Math.min(buf.length, Math.round(endSec * RATE))
+    );
+}
+
 export function wav (buf)
 {
     const bytes = Buffer.alloc(44 + buf.length * 2);

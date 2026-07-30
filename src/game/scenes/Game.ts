@@ -31,8 +31,10 @@ const ICE = 0x67e8f9;
 //  target a cloaked shinobi — identity checks see through the disguise.
 //  SHIELD: rapid fire, tiny per-shot damage. Built to shred swarms, poor
 //  against anything with real HP.
-//  WAF: slow, expensive, huge per-shot damage. The answer to injection
-//  flyers; wasted on the DDoS swarm because most of each shot is overkill.
+//  WAF: slow, expensive, huge per-shot damage, and the only tower that can
+//  engage a flyer at all — everything else is ground fire. That makes it
+//  mandatory rather than optional from the first SQLi wave onward. Wasted on
+//  the DDoS swarm, because most of each shot is overkill.
 //  SNOWMOBILE: the late-game money sink. Fires an instant ice lance instead
 //  of a bullet — enormous damage, once every few seconds, and it punches
 //  through everything standing in the line, so it pays off best aimed down a
@@ -56,6 +58,7 @@ interface TowerSpec {
     shot: string;             // projectile art, drawn at scale 1
     shotFacing: boolean;      // rotate the shot to its heading, or leave radial
     seesCloaked: boolean;
+    hitsFlying: boolean;      // can engage airborne mobs at all — see canEngage()
     beam?: boolean;           // hits instantly along a line instead of firing a bullet
     colour: number;
     hex: string;
@@ -69,14 +72,14 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     iam: {
         kind: 'iam', texture: 'tower-iam', name: 'IAM',
         unlock: 0, cost: 70, range: 120, rate: 340, damage: 9,
-        bulletSpeed: 700, shot: 'shot-iam', shotFacing: true, seesCloaked: true,
+        bulletSpeed: 700, shot: 'shot-iam', shotFacing: true, seesCloaked: true, hitsFlying: false,
         colour: CYAN, hex: '#38bdf8',
         fireSfx: 'sfx-iam-fire', fireGap: 70, fireVolume: 0.85
     },
     shield: {
         kind: 'shield', texture: 'tower-shield', name: 'SHIELD',
         unlock: 200, cost: 120, range: 130, rate: 120, damage: 4,
-        bulletSpeed: 780, shot: 'shot-shield', shotFacing: true, seesCloaked: false,
+        bulletSpeed: 780, shot: 'shot-shield', shotFacing: true, seesCloaked: false, hitsFlying: false,
         colour: ACCENT, hex: '#ff9900',
         //  Fires every 120ms per tower and there can be a dozen of them, so the
         //  gap is most of the fire rate: at full board only about 1 shot in 6
@@ -87,7 +90,9 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     waf: {
         kind: 'waf', texture: 'tower-waf', name: 'WAF',
         unlock: 350, cost: 200, range: 155, rate: 850, damage: 30,
-        bulletSpeed: 620, shot: 'shot-waf', shotFacing: true, seesCloaked: false,
+        //  The only tower that can touch a flyer. Inspecting request payloads is
+        //  the one thing in the roster that does not care what carried them.
+        bulletSpeed: 620, shot: 'shot-waf', shotFacing: true, seesCloaked: false, hitsFlying: true,
         colour: VIOLET, hex: '#a855f7',
         fireSfx: 'sfx-waf-fire', fireGap: 60, fireVolume: 1
     },
@@ -96,7 +101,8 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
         unlock: 750, cost: 420, range: 200, rate: 4000, damage: 300,
         //  Beam towers hit instantly, so bulletSpeed goes unused and the slug is
         //  decoration thrown down the lance after the damage has landed.
-        bulletSpeed: 0, shot: 'shot-snowmobile', shotFacing: true, seesCloaked: false, beam: true,
+        bulletSpeed: 0, shot: 'shot-snowmobile', shotFacing: true, seesCloaked: false,
+        hitsFlying: false, beam: true,
         colour: ICE, hex: '#67e8f9',
         //  A 980ms cryo discharge on a 4s cooldown: 200ms of charge, a crack,
         //  then the frozen tail. Loudest thing on the board by design. The gap
@@ -433,6 +439,10 @@ export class Game extends Scene
     burstEndsAt = 0;
     lastWaveText = '';
 
+    //  The "only WAF can engage" banner is shown once per run, on the first
+    //  wave that actually contains flyers.
+    warnedFlyers = false;
+
     spawner: Phaser.Time.TimerEvent;
     brownoutTimer?: Phaser.Time.TimerEvent;
     spikeTween?: Phaser.Tweens.Tween;
@@ -604,6 +614,7 @@ export class Game extends Scene
         this.waveLabel = '';
         this.burstEndsAt = 0;
         this.lastWaveText = '';
+        this.warnedFlyers = false;
         this.sfxAt = {};
 
         //  One background behind every hall — the halls only draw the floor up.
@@ -1338,6 +1349,23 @@ export class Game extends Scene
         if (tanks > 0) parts.push(`TANK x${tanks}`);
         if (this.regions.length > 1) parts.push(`IN ${this.regions.length} REGIONS`);
         this.waveLabel = `WAVE ${this.wave}  ·  ${parts.join('  ·  ')}`;
+
+        //  Flyers can only be engaged by WAF, which is not something a player
+        //  can deduce from watching their towers do nothing. Announce it once,
+        //  on the wave it starts mattering.
+        //
+        //  Today the first flyer wave is 3 and boss waves are multiples of 5, so
+        //  the two banners cannot collide. That is a coincidence of the current
+        //  constants rather than a guarantee, and flashHud() draws every banner
+        //  in the same slot, so hold back if a boss announcement already has it.
+        if (flyers > 0 && !this.warnedFlyers)
+        {
+            this.warnedFlyers = true;
+
+            const say = () => this.flashHud('SQLi INBOUND  ·  AIRBORNE  ·  ONLY WAF CAN ENGAGE', '#a855f7');
+            if (tanks > 0) this.time.delayedCall(2300, say);
+            else say();
+        }
 
         if (tanks > 0)
         {
@@ -2076,8 +2104,7 @@ export class Game extends Scene
 
         for (const e of region.enemies)
         {
-            if (!e.alive) continue;
-            if (e.cloaked && !spec.seesCloaked) continue;
+            if (!this.canEngage(spec, e)) continue;
 
             const dx = e.obj.x - tower.x;
             const dy = e.obj.y - tower.y;
@@ -2141,16 +2168,37 @@ export class Game extends Scene
         this.cameras.main.shake(90, 0.002);
     }
 
+    //  Can this tower engage this mob at all?
+    //
+    //  Both targeting paths go through here on purpose. nearestEnemy() picks a
+    //  target, but fireBeam() ignores that choice and sweeps everything along
+    //  the lance, so a rule enforced in only one place leaks: the snowmobile
+    //  would refuse to aim at a flyer and then shred it in passing anyway.
+    //
+    //  Taking the whole spec rather than a widening list of booleans, since this
+    //  is the second such capability and there will be more.
+    canEngage (spec: TowerSpec, e: Enemy)
+    {
+        if (!e.alive) return false;
+
+        //  Smoke-dashing shinobi are only visible to identity checks.
+        if (e.cloaked && !spec.seesCloaked) return false;
+
+        //  Airborne mobs ignore the trench entirely, and only WAF reaches them.
+        if (e.flying && !spec.hitsFlying) return false;
+
+        return true;
+    }
+
     //  Towers only see their own hall.
-    nearestEnemy (region: Region, x: number, y: number, range: number, seesCloaked: boolean): Enemy | null
+    nearestEnemy (region: Region, x: number, y: number, spec: TowerSpec): Enemy | null
     {
         let best: Enemy | null = null;
-        let bestDist = range;
+        let bestDist = spec.range;
 
         for (const e of region.enemies)
         {
-            if (!e.alive) continue;
-            if (e.cloaked && !seesCloaked) continue;
+            if (!this.canEngage(spec, e)) continue;
 
             const d = PhaserMath.Distance.Between(x, y, e.obj.x, e.obj.y);
             if (d <= bestDist)
@@ -2280,7 +2328,7 @@ export class Game extends Scene
             //  Target is resolved every frame, not just when the cooldown is
             //  up, so the emplacement can track a mob while it reloads and is
             //  already lined up when it fires.
-            const target = this.nearestEnemy(region, t.x, t.y, t.spec.range, t.spec.seesCloaked);
+            const target = this.nearestEnemy(region, t.x, t.y, t.spec);
 
             if (target)
             {

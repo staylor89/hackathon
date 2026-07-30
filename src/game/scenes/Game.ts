@@ -1036,48 +1036,16 @@ export class Game extends Scene
         return bar;
     }
 
-    //  Buildable slots = free tiles that touch the cable trench.
+    //  Every tile in the hall is a buildable slot — no reserved cells, no
+    //  trench-adjacency rule. 176 pads a hall, so this is also the largest
+    //  single source of interactive objects on the board.
     drawPads (region: Region)
     {
-        const layout = region.layout;
-        const occupied = new Set<string>();
-        const onPath = new Set<string>();
-
-        //  Walk each straight segment and mark every cell it crosses.
-        for (let i = 0; i < layout.waypoints.length - 1; i++)
-        {
-            const [c1, r1] = layout.waypoints[i];
-            const [c2, r2] = layout.waypoints[i + 1];
-            const steps = Math.max(Math.abs(c2 - c1), Math.abs(r2 - r1));
-            const dc = Math.sign(c2 - c1);
-            const dr = Math.sign(r2 - r1);
-
-            for (let s = 0; s <= steps; s++)
-            {
-                const key = `${c1 + dc * s},${r1 + dr * s}`;
-                onPath.add(key);
-                occupied.add(key);
-            }
-        }
-
-        //  The origin server, derived from the row it sits on so a mirrored
-        //  layout can't forget to move it.
-        for (let r = layout.originRow - 1; r <= layout.originRow + 1; r++)
-        {
-            occupied.add(`14,${r}`);
-            occupied.add(`15,${r}`);
-        }
-
         for (let col = 0; col < COLS; col++)
         {
             for (let row = 0; row < ROWS; row++)
             {
-                if (occupied.has(`${col},${row}`)) continue;
-
-                const touchesPath = onPath.has(`${col - 1},${row}`) || onPath.has(`${col + 1},${row}`)
-                    || onPath.has(`${col},${row - 1}`) || onPath.has(`${col},${row + 1}`);
-
-                if (touchesPath) this.makePad(region, col, row, this.azAt(region, col));
+                this.makePad(region, col, row, this.azAt(region, col));
             }
         }
     }

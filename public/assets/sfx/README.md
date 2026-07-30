@@ -73,7 +73,7 @@ satisfies that, so no manual unlock handling is needed.
 | `sfx-ninja-dash` | `ninja-dash.wav` | 190ms | -22 dBFS | Both ends of a shinobi smoke dash |
 | `sfx-breach` | `turtle-mating-short.wav` | 340ms | -14 dBFS | Flood or shinobi reaches the origin. **Sourced clip** |
 | `sfx-breach-heavy` | `turtle-mating.wav` | 936ms | -9 dBFS | Flyer or tank lands. **Sourced clip**, full length |
-| `sfx-wave-start` | `i-like-turtles.wav` | 895ms | -5 dBFS | Wave inbound. **Sourced clip** |
+| `sfx-wave-start` | `i-like-turtles.wav` | 895ms | -11 dBFS | Wave inbound. **Sourced clip** |
 | `sfx-wave-boss` | `wave-boss.wav` | 980ms | -11 dBFS | Boss wave. Still synth — the boss alert was never the harsh beep |
 | `sfx-region-down` | `region-down.wav` | 1700ms | -10 dBFS | Integrity zero. Detuned saw pair falling 330 to 44 Hz |
 | `sfx-ui-click` | `ui-click.wav` | 28ms | -20 dBFS | Arming a build button |
@@ -89,20 +89,25 @@ are committed at `tools/source-audio/*.mp3` so the pipeline stays reproducible;
 `npm run clips` decodes, downmixes to mono, trims, levels and fades them into the
 same format as everything else.
 
-    i-like-turtles.mp3   -> i-like-turtles.wav          (whole clip, -5 dBFS)
+    i-like-turtles.mp3   -> i-like-turtles.wav          (whole clip, -11 dBFS)
     turtle-mating.mp3    -> turtle-mating.wav           (whole clip, -9 dBFS)
                          -> turtle-mating-short.wav     (first 0.34s, -14 dBFS)
 
 Two things differ from the synth one-shots when playing these back:
 
-**Throttles are longer than the clip.** A light breach fires per arriving packet
-and the flood spawns 260ms apart, so `sfx-breach` uses a 400ms gap against a
-340ms clip. Two overlapping thuds read as one bigger thud; two overlapping
-voice-like clips read as mush.
+**Throttling is per clip, and the two breaches disagree on purpose.** The light
+breach fires per arriving packet against a flood spawning 260ms apart, so
+`sfx-breach` keeps a 400ms gap on a 340ms clip: overlapping copies of a
+voice-like clip read as mush, where overlapping thuds would just read as one
+bigger thud. The heavy breach has **no gap at all**, because several flyers
+landing together should pile up into a chorus. It plays at `0.75` so three or
+four at once do not clip the master.
 
-**Pitch jitter is off or minimal.** `sfx-wave-start` uses `jitter: 0`, because
+**Pitch jitter is set per clip.** `sfx-wave-start` uses `jitter: 0`, because
 detuning a recognisable line makes it sound like a warped tape rather than like
-variation. The breach clips take a reduced `0.03`.
+variation. The light breach takes a reduced `0.03`; the heavy breach takes `0.09`,
+raised precisely because it is allowed to stack, so overlapping copies are
+audibly separate turtles rather than one phase-aligned turtle.
 
 Decoding needs `afconvert`, which ships with macOS. There is no pure-Node MP3
 decoder in the toolchain and a dependency for three clips is not worth it; swap

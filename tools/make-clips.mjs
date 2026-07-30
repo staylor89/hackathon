@@ -35,9 +35,12 @@ const OUT = join(HERE, '..', 'public', 'assets', 'sfx');
 
 const CLIPS = [
     {
+        //  Was -5, which made it the loudest asset in the game - louder than
+        //  the snowmobile beam. It plays every wave, so it does not need to win
+        //  that fight; -11 puts it level with the boss alert.
         out: 'i-like-turtles',
         src: 'i-like-turtles.mp3',
-        db: -5,
+        db: -11,
         fadeOut: 30,
         brief: 'Wave inbound. Replaces the synth alert; plays once per wave.'
     },

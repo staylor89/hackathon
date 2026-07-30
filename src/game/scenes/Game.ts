@@ -286,11 +286,11 @@ export class Game extends Scene
     bullets: Bullet[] = [];
 
     //  Wave clock. burstEndsAt is when the last mob of the current wave has
-    //  spawned; between that and nextWaveAt the HUD counts down instead of
-    //  listing the composition.
+    //  spawned; past that the HUD counts down to the next wave instead of
+    //  listing the composition. The countdown itself is read off the spawner
+    //  timer rather than kept here as a timestamp — see updateWaveText().
     waveLabel = '';
     burstEndsAt = 0;
-    nextWaveAt = 0;
     lastWaveText = '';
 
     route: Phaser.Curves.Path;
@@ -458,7 +458,6 @@ export class Game extends Scene
         this.pickers = {};
         this.waveLabel = '';
         this.burstEndsAt = 0;
-        this.nextWaveAt = 0;
         this.lastWaveText = '';
         this.sfxAt = {};
 
@@ -475,7 +474,6 @@ export class Game extends Scene
 
         //  Build phase: nothing spawns until the player has had time to spend
         //  the opening budget.
-        this.nextWaveAt = this.time.now + PREP_MS;
         this.spawner = this.time.delayedCall(PREP_MS, () => this.startWave());
         this.flashHud('BUILD PHASE  ·  SPEND YOUR BUDGET', '#38bdf8');
 
@@ -1021,7 +1019,6 @@ export class Game extends Scene
         );
 
         this.burstEndsAt = this.time.now + burst;
-        this.nextWaveAt = this.time.now + burst + this.waveGap;
 
         this.spawner = this.time.delayedCall(burst + this.waveGap, () => this.startWave());
     }
@@ -1030,7 +1027,24 @@ export class Game extends Scene
     updateWaveText ()
     {
         const quiet = this.time.now >= this.burstEndsAt;
-        const secs = Math.max(0, Math.ceil((this.nextWaveAt - this.time.now) / 1000));
+
+        //  Read the countdown straight off the timer that starts the wave.
+        //
+        //  It used to be `nextWaveAt - this.time.now`, with nextWaveAt set in
+        //  create(). That is broken: every scene is registered in the game
+        //  config up front, so this scene's Clock boots at game start and then
+        //  sits at ~0 until the scene becomes active — Clock.update() only runs
+        //  on its own scene's UPDATE event, and Clock.start() does not re-sync
+        //  now. So during create() this.time.now is still ~0, and nextWaveAt
+        //  became 0 + PREP_MS. By the first frame the clock had jumped to real
+        //  loop time, which is already past PREP_MS once Preloader has decoded
+        //  the audio and the player has spent a moment on the menu, so the
+        //  countdown clamped to 0 and sat there for the whole build phase.
+        //
+        //  The TimerEvent tracks its own elapsed time and was always correct,
+        //  which is why the wave still landed on schedule. Asking it directly
+        //  removes the parallel bookkeeping instead of just re-basing it.
+        const secs = Math.max(0, Math.ceil(this.spawner.getRemaining() / 1000));
 
         const text = quiet
             ? `WAVE ${this.wave + 1} INBOUND  ·  ${secs}s`
@@ -1310,11 +1324,17 @@ export class Game extends Scene
         //  packet in the flood.
         const heavy = damage >= INJECT_DAMAGE;
 
-        //  Both are cuts of the same recording, which changes the throttling
-        //  from the synth thuds these replaced: two overlapping copies of a
-        //  voice-like clip read as mush, where two overlapping thuds just read
-        //  as a bigger thud. So each gap is longer than its own clip.
-        if (heavy) this.sfx('sfx-breach-heavy', { minGap: 1000, jitter: 0.03 });
+        //  Heavy breaches stack on purpose: several flyers landing together
+        //  should pile up into a chorus rather than collapse into one call. No
+        //  minGap, and the jitter goes up so overlapping copies are audibly
+        //  separate turtles instead of one phase-aligned turtle. Volume comes
+        //  down to leave room for three or four at once without the master
+        //  clipping.
+        //
+        //  The light version keeps its throttle. It fires per arriving packet
+        //  and the flood spawns 260ms apart, which is a pile-up of a different
+        //  and much less funny kind.
+        if (heavy) this.sfx('sfx-breach-heavy', { volume: 0.75, jitter: 0.09 });
         else this.sfx('sfx-breach', { volume: 0.85, minGap: 400, jitter: 0.03 });
 
         this.cameras.main.shake(heavy ? 320 : 180, heavy ? 0.012 : 0.006);

@@ -127,7 +127,7 @@ const BEAM_OVERSHOOT = 44;
 //  Text budget inside a HUD build button, and for the wave composition line.
 //  Both are fitText()'d because their content varies — see fitText().
 const PICKER_TEXT_W = 80;
-const WAVE_TEXT_W = 250;
+const WAVE_TEXT_W = 190;
 
 //  Selling a tower hands back half of what it cost.
 const SELL_RATE = 0.5;
@@ -307,6 +307,24 @@ const flipRows = (l: Layout): Layout => ({
 //  are all different rooms.
 const LAYOUTS: Layout[] = [HALL_A, flipRows(HALL_A), HALL_C, flipRows(HALL_C)];
 
+//  ── Powerups ─────────────────────────────────────────────────────────────
+//  Incident response. Both buttons act on every region at once and are priced
+//  like the last resort they are: money spent here is towers not built.
+//
+//  Rate limiting throttles every mob on the board to a crawl for a few
+//  seconds — long enough to let the towers catch back up, short enough that
+//  it can't replace them. Calling the CTO clears the board outright, and pays
+//  no bounty: the CTO takes the credit.
+const RATE_LIMIT_COST = 750;
+const RATE_LIMIT_MS = 8000;   // how long the throttle holds
+const RATE_LIMIT_SLOW = 0.35; // mob speed while it does
+const CTO_COST = 2500;
+
+//  The two buttons stack between the wave readout and the build buttons.
+const PWRUP_X = 492;          // centre
+const PWRUP_W = 74;
+const PWRUP_H = 24;
+
 //  ── Degradation ──────────────────────────────────────────────────────────
 //  Every breach causes a temporary latency spike; each 10% of integrity lost
 //  also trips a permanent tier below. See TIERS in applyTier().
@@ -320,7 +338,7 @@ const OFFLINE = 0x475569;
 //  Second HUD line. The hall you are looking at is prepended, and the line is
 //  rewritten on mute and on every region switch.
 const HINT = 'CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  1-4 / TAB REGION  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
-const HINT_W = 500;          // fitText() budget — it must not reach the build buttons
+const HINT_W = 430;          // fitText() budget — it must not reach the powerup buttons
 
 //  ── Music ────────────────────────────────────────────────────────────────
 //  Music sits under the effects, but not by much any more. The tracks peak at
@@ -437,6 +455,10 @@ export class Game extends Scene
     brownoutTimer?: Phaser.Time.TimerEvent;
     spikeTween?: Phaser.Tweens.Tween;
 
+    //  Scene time the rate-limit throttle lifts, 0 while it is off. Movement
+    //  code reads this every frame — see updateRegion().
+    rateLimitUntil = 0;
+
     //  HUD
     budgetText: GameObjects.Text;
     waveText: GameObjects.Text;
@@ -446,6 +468,14 @@ export class Game extends Scene
     hintText: GameObjects.Text;
     vignette: GameObjects.Rectangle;
     debugPanel?: GameObjects.Container;
+    powerups: {
+        box: GameObjects.Rectangle,
+        name: GameObjects.Text,
+        price: GameObjects.Text,
+        cost: number,
+        on: () => boolean,              // lights the button while its effect runs
+        state: string                   // last painted state — see paintPowerups()
+    }[] = [];
     pickers: Partial<Record<TowerKind, {
         box: GameObjects.Rectangle,
         icon: GameObjects.Image,
@@ -601,6 +631,8 @@ export class Game extends Scene
         this.selected = 'iam';
         this.unlocked = { iam: true, shield: false, waf: false, snowmobile: false };
         this.pickers = {};
+        this.powerups = [];
+        this.rateLimitUntil = 0;
         this.waveLabel = '';
         this.burstEndsAt = 0;
         this.lastWaveText = '';
@@ -1547,11 +1579,8 @@ export class Game extends Scene
         enemy.barBg.setAlpha(0.25);
         enemy.bar.setAlpha(0.25);
 
-        //  pathTween is what startFollow() drives; scaling it is the cheapest
-        //  way to change speed mid-follow without restarting the follow.
-        const tween = enemy.follower?.pathTween;
-        if (tween) tween.timeScale = NINJA_DASH_MULT;
-
+        //  The dash speed itself lands in updateRegion(), which re-derives
+        //  every walker's speed each frame from cloak state and rate limiting.
         this.smokePuff(enemy);
     }
 
@@ -1564,9 +1593,6 @@ export class Game extends Scene
         enemy.obj.setAlpha(1);
         enemy.barBg.setAlpha(1);
         enemy.bar.setAlpha(1);
-
-        const tween = enemy.follower?.pathTween;
-        if (tween) tween.timeScale = 1;
 
         this.smokePuff(enemy);
     }
@@ -2203,6 +2229,7 @@ export class Game extends Scene
         for (const region of this.regions) this.updateRegion(region, delta, dt, penalty);
 
         this.paintTabs();
+        this.paintPowerups();
     }
 
     //  One hall's simulation. Runs whether or not the hall is on screen: the
@@ -2220,6 +2247,22 @@ export class Game extends Scene
             else if (e.uncloakAt > 0 && this.time.now >= e.uncloakAt) this.uncloak(e);
         }
 
+        //  Rate limiting throttles the whole board, and it multiplies onto
+        //  whatever a mob was already doing — a dashing shinobi stays
+        //  proportionally faster than the flood.
+        const limit = this.time.now < this.rateLimitUntil ? RATE_LIMIT_SLOW : 1;
+
+        //  Walkers ride their pathTween; scaling it is the cheapest way to
+        //  change speed mid-follow without restarting the follow. Re-derived
+        //  every frame so cloak dashes and the throttle compose either way.
+        for (const e of region.enemies)
+        {
+            if (!e.alive) continue;
+
+            const tween = e.follower?.pathTween;
+            if (tween) tween.timeScale = (e.cloaked ? NINJA_DASH_MULT : 1) * limit;
+        }
+
         //  Flyers move themselves — no path, so this is their whole AI.
         for (const e of region.enemies)
         {
@@ -2227,8 +2270,8 @@ export class Game extends Scene
 
             if (this.time.now >= e.turnAt) this.steer(e);
 
-            e.obj.x += e.vx * dt;
-            e.obj.y += e.vy * dt;
+            e.obj.x += e.vx * dt * limit;
+            e.obj.y += e.vy * dt * limit;
 
             //  Keep them inside the data hall, bouncing off the floor edges.
             if (e.obj.y < FLOOR_Y + 24) { e.obj.y = FLOOR_Y + 24; e.vy = Math.abs(e.vy); }
@@ -2424,14 +2467,131 @@ export class Game extends Scene
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.waveText = this.add.text(402, 4, 'WAVE 1', {
+        this.waveText = this.add.text(355, 4, 'WAVE 1', {
             fontFamily: 'Arial', fontSize: 13, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.integrityText = this.add.text(402, 24, 'INTEGRITY 100%', {
+        this.integrityText = this.add.text(355, 24, 'INTEGRITY 100%', {
             fontFamily: 'Arial Black', fontSize: 14, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
+        //  Incident response, stacked between the wave readout and the towers.
+        this.makePowerup(0, 'RATE LIMIT', RATE_LIMIT_COST,
+            () => this.time.now < this.rateLimitUntil, () => this.rateLimit());
+        this.makePowerup(1, 'CALL THE CTO', CTO_COST,
+            () => false, () => this.callCto());
+        this.paintPowerups();
+    }
+
+    //  One incident-response button. Unlike a tower there is nothing to arm:
+    //  clicking it spends the money and fires the effect on the spot.
+    makePowerup (row: number, label: string, cost: number, on: () => boolean, run: () => void)
+    {
+        const y = 20 + row * (PWRUP_H + 4);
+
+        const box = this.add.rectangle(PWRUP_X, y, PWRUP_W, PWRUP_H)
+            .setStrokeStyle(1, PAD_LINE, 0.9)
+            .setDepth(10)
+            .setInteractive({ useHandCursor: true });
+
+        const name = this.add.text(PWRUP_X, y - 5, label, {
+            fontFamily: 'Arial Black', fontSize: 8, color: '#8ea3b8'
+        }).setOrigin(0.5).setDepth(11);
+
+        const price = this.add.text(PWRUP_X, y + 6, `$${cost}`, {
+            fontFamily: 'Arial', fontSize: 8, color: '#5c728a'
+        }).setOrigin(0.5).setDepth(11);
+
+        this.fitText(name, PWRUP_W - 8);
+
+        box.on('pointerdown', run);
+
+        this.powerups.push({ box, name, price, cost, on, state: '' });
+    }
+
+    //  Runs every frame with the same paint-on-change guard as the tabs:
+    //  affordability tracks the budget, and the rate-limit button holds an ice
+    //  glow for as long as its throttle does.
+    paintPowerups ()
+    {
+        for (const p of this.powerups)
+        {
+            const active = p.on();
+            const afford = this.budget >= p.cost;
+
+            const state = `${active}|${afford}`;
+            if (state === p.state) continue;
+            p.state = state;
+
+            const colour = active ? ICE : afford ? ACCENT : PAD_LINE;
+
+            p.box.setStrokeStyle(active ? 2 : 1, colour, active || afford ? 0.9 : 0.5);
+            p.box.setFillStyle(colour, active ? 0.22 : 0);
+            p.name.setColor(active ? '#67e8f9' : afford ? '#e6edf3' : '#5c728a');
+            p.price.setColor(active ? '#67e8f9' : afford ? '#ff9900' : '#5c728a');
+        }
+    }
+
+    //  Throttle every mob in every region to a crawl for a few seconds. The
+    //  discount is applied per-frame in updateRegion(), which reads the clock,
+    //  so mobs that spawn mid-throttle are throttled too.
+    rateLimit ()
+    {
+        if (this.over || this.time.now < this.rateLimitUntil) return;
+
+        if (this.budget < RATE_LIMIT_COST)
+        {
+            this.rejectPurchase();
+            return;
+        }
+
+        this.budget -= RATE_LIMIT_COST;
+        this.budgetText.setText(`$${this.budget}`);
+        this.rateLimitUntil = this.time.now + RATE_LIMIT_MS;
+
+        this.sfx('sfx-ui-click', { volume: 0.9 });
+        this.flashHud('429  ·  RATE LIMITING EVERY REGION', '#67e8f9');
+    }
+
+    //  Clear the board, everywhere. Pays no bounty — the CTO takes the credit.
+    //  Refused with the buy-error buzz when there is nothing to destroy, so a
+    //  misclick between waves cannot quietly eat the money.
+    callCto ()
+    {
+        if (this.over) return;
+
+        const doomed: Enemy[] = [];
+
+        for (const r of this.regions)
+        {
+            for (const e of r.enemies) if (e.alive) doomed.push(e);
+        }
+
+        if (doomed.length === 0 || this.budget < CTO_COST)
+        {
+            this.rejectPurchase();
+            return;
+        }
+
+        this.budget -= CTO_COST;
+        this.budgetText.setText(`$${this.budget}`);
+
+        for (const e of doomed)
+        {
+            const pop = this.add.circle(e.obj.x, e.obj.y, e.boss ? 26 : 10, ICE).setDepth(6);
+            e.region.layer.add(pop);
+
+            this.tweens.add({
+                targets: pop, scale: 3, alpha: 0, duration: 320,
+                onComplete: () => pop.destroy()
+            });
+
+            this.killEnemy(e, false);
+        }
+
+        this.sfx('sfx-boss-death');
+        this.cameras.main.flash(300, 200, 240, 255);
+        this.flashHud(`THE CTO HAS BEEN CALLED  ·  ${doomed.length} THREATS GONE`, '#67e8f9');
     }
 
     //  Bottom HUD line: which region you are looking at, then every key

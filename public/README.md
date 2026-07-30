@@ -37,3 +37,28 @@ only.
 
 Regenerating: the sprite is drawn in code, supersampled 8x and downscaled to
 64. Edit the draw script in the design project and re-export.
+
+## Injection tortoise (flying)
+
+SQL / prompt injection, airborne. Same build as the default mob - hexagonal
+packet mesh, one head, four feet - recoloured fuchsia, with a pair of scalloped
+membrane wings and a single flat cyan seam across the shell where the payload
+went in. Treat it as a flyer: it ignores ground routing. Same canvas, margin
+and centre pivot as the default mob, so it drops into the same spawn code.
+
+- Key: tortoise-injection
+- Asymmetric silhouette, but centre of mass still at canvas centre.
+- One wing per side, single unbroken outline with three scalloped feather tips;
+  wingtips stay inside the 8px margin.
+- Symmetric across the axis of travel; centre of mass at the canvas centre.
+
+Palette:
+
+| Role    | Hex     |
+|---------|---------|
+| Shell   | #e879f9 |
+| Cells   | #a21caf |
+| Wing    | #f7c4ff |
+| Seam    | #22d3ee |
+| Limbs   | #c95ae0 |
+| Outline | #2b0a2e |

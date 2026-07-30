@@ -92,6 +92,10 @@ export class Preloader extends Scene
         this.load.audio('sfx-wave-boss', 'assets/sfx/wave-boss.wav');
         this.load.audio('sfx-region-down', 'assets/sfx/region-down.wav');
 
+        //  A new data hall coming online. The generator's unused GuardDuty ping
+        //  is exactly the right shape for it, so no new recipe was needed.
+        this.load.audio('sfx-region-up', 'assets/sfx/tower-guardduty-ping.wav');
+
         this.load.audio('sfx-ui-click', 'assets/sfx/ui-click.wav');
         this.load.audio('sfx-place-denied', 'assets/sfx/place-denied.wav');
 

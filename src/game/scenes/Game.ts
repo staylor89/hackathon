@@ -39,7 +39,8 @@ const ICE = 0x67e8f9;
 //  long straight of the trench. Terrible value against anything it one-shots.
 //
 //  unlock is a one-off purchase per run before the tower can be built at all.
-//  IAM starts unlocked so wave 1 is always playable.
+//  IAM starts unlocked so wave 1 is always playable. Unlocks are region-wide:
+//  buying SHIELD once makes it buildable in every data hall.
 type TowerKind = 'iam' | 'shield' | 'waf' | 'snowmobile';
 
 interface TowerSpec {
@@ -182,9 +183,120 @@ const SWARM_SPACING = 260;    // ms between mobs inside a wave
 const WAVE_GAP = 10000;       // ms of quiet between waves
 const PREP_MS = 15000;        // build phase before wave 1 lands
 
-//  Where the flyers are headed — the front face of the origin rack.
+//  Where the flyers are headed — the front face of the origin rack. Every hall
+//  has its origin against the right edge; only the row changes.
 const ORIGIN_X = 960;
-const ORIGIN_ROW = 7;
+
+//  ── Regions ──────────────────────────────────────────────────────────────
+//  A region is a data hall: its own trench, its own pads, its own towers, its
+//  own intruders. What it does NOT have of its own is money, origin integrity,
+//  score, tower unlocks or the wave clock — one wallet and one origin server
+//  behind every hall, which is the whole point of the mechanic.
+//
+//  A new hall is provisioned in the gap after every tenth wave, and from then
+//  on every wave lands in full in every hall at once. Only one is on screen at
+//  a time (TAB, or click the tab strip); the ones you are not watching keep
+//  simulating, so a breach over there costs exactly as much.
+const REGION_EVERY = 10;      // waves between provisions
+const REGION_PREP = 12000;    // extra ms of quiet in the gap a hall opens in
+const REGION_ALERT_MS = 900;  // how long a breach lights up a hall's tab
+const MAX_REGIONS = 4;        // one per layout, and the tab strip fits four
+
+//  AZ-C, AZ-D, AZ-E, ... — the region's availability zones, in the order they
+//  come online.
+const hallName = (index: number) => `AZ-${String.fromCharCode(67 + index)}`;
+
+//  Region tab strip: sits in the HUD band, above the build buttons and left of
+//  the budget readout.
+const TAB_X = 536;
+const TAB_Y = 10;
+const TAB_W = 58;
+const TAB_H = 16;
+const TAB_GAP = 4;
+
+//  A power domain is a 4x3 block of tiles that goes dark as integrity drops.
+const PWR_W = 4;
+const PWR_H = 3;
+const PWR_NAMES = ['PWR-A', 'PWR-B'];
+
+interface RackDecor {
+    col: number;
+    row: number;
+    w: number;                // px, not tiles — racks are 48px deep in a 64px row
+    h: number;
+    label: string;
+}
+
+//  Everything that makes one hall's floor plan. Halls differ only in here, so
+//  a new layout is a data change and never a code change.
+interface Layout {
+    //  Cable route the intruders walk, off-screen left to the origin server.
+    //  Must run left-to-right: the art faces right and both the walkers and the
+    //  flyers are rotated to their heading, so a route that doubled back would
+    //  render every tortoise upside down.
+    waypoints: [number, number][];
+    originRow: number;
+    ingressRow: number;
+    //  Cells taken up by decorative hardware — never buildable. The origin
+    //  rack's own cells are derived from originRow, not listed here.
+    rackCells: [number, number][];
+    decor: RackDecor[];
+    //  Top-left corner of each power domain, in the order they fail.
+    power: [number, number][];
+}
+
+const HALL_A: Layout = {
+    waypoints: [
+        [-1, 1], [4, 1], [4, 4], [1, 4], [1, 8], [6, 8], [6, 3], [10, 3], [10, 7], [13, 7]
+    ],
+    originRow: 7,
+    ingressRow: 1,
+    rackCells: [
+        [12, 0], [13, 0], [14, 0], [15, 0],
+        [8, 10], [9, 10], [10, 10], [11, 10], [12, 10]
+    ],
+    decor: [
+        { col: 12, row: 0, w: 248, h: 48, label: 'RACK A1-A4' },
+        { col: 8, row: 10, w: 312, h: 48, label: 'RACK B1-B5' }
+    ],
+    power: [[12, 0], [0, 8]]
+};
+
+//  Second floor plan. Same 16x11 grid, a route of comparable length (38 tiles
+//  against A's 36, so mob travel time is within a few percent) and a different
+//  set of straights, which changes which towers are worth building where.
+const HALL_C: Layout = {
+    waypoints: [
+        [-1, 4], [2, 4], [2, 1], [5, 1], [5, 6], [2, 6], [2, 9], [8, 9], [8, 4], [11, 4], [11, 2], [13, 2]
+    ],
+    originRow: 2,
+    ingressRow: 4,
+    rackCells: [
+        [9, 10], [10, 10], [11, 10], [12, 10], [13, 10],
+        [0, 0], [1, 0]
+    ],
+    decor: [
+        { col: 9, row: 10, w: 312, h: 48, label: 'RACK C1-C5' },
+        { col: 0, row: 0, w: 120, h: 48, label: 'RACK C6-C7' }
+    ],
+    power: [[0, 7], [12, 4]]
+};
+
+//  Mirror a hall top to bottom. Path length, tile count and the number of pads
+//  all survive the flip, so balance is untouched while the board reads as a
+//  different room. Only the vertical axis is mirrored: see Layout.waypoints.
+const flipRows = (l: Layout): Layout => ({
+    waypoints: l.waypoints.map(([c, r]) => [c, ROWS - 1 - r] as [number, number]),
+    originRow: ROWS - 1 - l.originRow,
+    ingressRow: ROWS - 1 - l.ingressRow,
+    rackCells: l.rackCells.map(([c, r]) => [c, ROWS - 1 - r] as [number, number]),
+    decor: l.decor.map(d => ({ ...d, row: ROWS - 1 - d.row })),
+    power: l.power.map(([c, r]) => [c, ROWS - PWR_H - r] as [number, number])
+});
+
+//  Hall n uses LAYOUTS[n]. Two plans and their mirrors, so the first four halls
+//  are all different rooms.
+const LAYOUTS: Layout[] = [HALL_A, flipRows(HALL_A), HALL_C, flipRows(HALL_C)];
 
 //  ── Degradation ──────────────────────────────────────────────────────────
 //  Every breach causes a temporary latency spike; each 10% of integrity lost
@@ -196,8 +308,9 @@ const BROWNOUT_EVERY = 4000;  // ms between brownouts once they start
 const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
 const OFFLINE = 0x475569;
 
-//  Second HUD line. Rewritten on mute so the state is visible while presenting.
-const HINT = 'DATA HALL 1  ·  AZ-C  ·  CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
+//  Second HUD line. The hall you are looking at is prepended, and the line is
+//  rewritten on mute and on every region switch.
+const HINT = 'CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  TAB REGION  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
 const HINT_W = 500;          // fitText() budget — it must not reach the build buttons
 
 //  ── Music ────────────────────────────────────────────────────────────────
@@ -207,19 +320,8 @@ const HINT_W = 500;          // fitText() budget — it must not reach the build
 const MUSIC_VOL = 0.8;
 const MUSIC_FADE = 900;       // ms of crossfade between tracks
 
-//  Cable route: enemies walk from off-screen left to the origin server.
-const WAYPOINTS: [number, number][] = [
-    [-1, 1], [4, 1], [4, 4], [1, 4], [1, 8], [6, 8], [6, 3], [10, 3], [10, 7], [13, 7]
-];
-
-//  Cells taken up by decorative hardware — never buildable.
-const RACK_CELLS: [number, number][] = [
-    [12, 0], [13, 0], [14, 0], [15, 0],
-    [8, 10], [9, 10], [10, 10], [11, 10], [12, 10],
-    [14, 6], [15, 6], [14, 7], [15, 7], [14, 8], [15, 8]
-];
-
 interface Enemy {
+    region: Region;
     //  PathFollower extends Sprite, so ground and air mobs share this field.
     obj: GameObjects.Sprite;
     follower?: GameObjects.PathFollower;   // only set for trench walkers
@@ -244,6 +346,7 @@ interface Enemy {
 }
 
 interface Tower {
+    region: Region;
     x: number;
     y: number;
     spec: TowerSpec;
@@ -262,9 +365,32 @@ interface Bullet {
     facing: boolean;                    // keep the art pointed down its heading
 }
 
+interface Region {
+    index: number;
+    name: string;
+    layout: Layout;
+    //  Every display object belonging to this hall lives in here, which is what
+    //  makes switching halls one setVisible() call. A Layer rather than a
+    //  Container: children keep world coordinates and their own depth, so
+    //  followers, hit areas and the existing depth numbers all still work.
+    layer: GameObjects.Layer;
+    route: Phaser.Curves.Path;
+    towers: Tower[];
+    enemies: Enemy[];
+    bullets: Bullet[];
+    pads: GameObjects.Rectangle[];
+    integrityBar: GameObjects.Rectangle;
+    alertUntil: number;                 // scene time the tab stops flashing red
+    tab: {
+        box: GameObjects.Rectangle,
+        text: GameObjects.Text,
+        state: string                   // last painted state, so paintTabs() can skip
+    };
+}
+
 export class Game extends Scene
 {
-    //  Run state
+    //  Run state — shared across every data hall.
     budget = 500;
     integrity = 100;
     wave = 0;
@@ -279,15 +405,16 @@ export class Game extends Scene
     spikeUntil = 0;           // scene time the current latency spike ends
     latency = BASE_LATENCY;   // displayed p99, tweened back down after a spike
     tiersHit = 0;
+    powerLost: number[] = []; // power domains already dark, replayed into new halls
 
     //  Which tower the next click builds, and which are bought at all.
     selected: TowerKind = 'iam';
     unlocked: Record<TowerKind, boolean> = { iam: true, shield: false, waf: false, snowmobile: false };
 
-    //  Live objects
-    enemies: Enemy[] = [];
-    towers: Tower[] = [];
-    bullets: Bullet[] = [];
+    //  Data halls, and which one is on screen.
+    regions: Region[] = [];
+    active = 0;
+    provisionAt = 0;          // scene time the next hall comes online, 0 if none due
 
     //  Wave clock. burstEndsAt is when the last mob of the current wave has
     //  spawned; past that the HUD counts down to the next wave instead of
@@ -297,7 +424,6 @@ export class Game extends Scene
     burstEndsAt = 0;
     lastWaveText = '';
 
-    route: Phaser.Curves.Path;
     spawner: Phaser.Time.TimerEvent;
     brownoutTimer?: Phaser.Time.TimerEvent;
     spikeTween?: Phaser.Tweens.Tween;
@@ -306,7 +432,6 @@ export class Game extends Scene
     budgetText: GameObjects.Text;
     waveText: GameObjects.Text;
     integrityText: GameObjects.Text;
-    integrityBar: GameObjects.Rectangle;
     latencyText: GameObjects.Text;
     statusText: GameObjects.Text;
     hintText: GameObjects.Text;
@@ -329,6 +454,9 @@ export class Game extends Scene
     cx (col: number) { return col * TILE + TILE / 2; }
     cy (row: number) { return FLOOR_Y + row * TILE + TILE / 2; }
 
+    //  The hall currently on screen. The only one that accepts clicks.
+    current () { return this.regions[this.active]; }
+
     // ── Sound ────────────────────────────────────────────────────────────
 
     //  Scene time each key was last heard, so a key can refuse to retrigger.
@@ -341,6 +469,9 @@ export class Game extends Scene
     //  mid-game there are 50+ shots a second on the board and Web Audio will
     //  happily mix all of them into mush; dropping the surplus costs nothing
     //  perceptually because nobody can pick out individual shots at that rate.
+    //  With several halls running at once this matters more, not less: the
+    //  throttles are per key across the whole game, so four halls firing sound
+    //  like a busy region rather than four times the noise.
     //
     //  jitter detunes each play a little. Without it, identical samples stack
     //  phase-coherently and read as one smeared tone instead of many shots.
@@ -393,13 +524,13 @@ export class Game extends Scene
         this.music = incoming;
     }
 
-    //  Boss music holds for as long as a leatherback is on the board, which
-    //  outlasts its own wave — a tank crawls for nearly a minute and the wave
-    //  gap is ten seconds, so the next wave routinely starts while it is still
-    //  inbound.
+    //  Boss music holds for as long as a leatherback is on the board anywhere,
+    //  which outlasts its own wave — a tank crawls for nearly a minute and the
+    //  wave gap is ten seconds, so the next wave routinely starts while it is
+    //  still inbound. A tank in a hall you are not watching still counts.
     bossActive ()
     {
-        return this.enemies.some(e => e.alive && e.boss);
+        return this.regions.some(r => r.enemies.some(e => e.alive && e.boss));
     }
 
     refreshMusic ()
@@ -446,9 +577,9 @@ export class Game extends Scene
         this.wave = 0;
         this.score = 0;
         this.over = false;
-        this.enemies = [];
-        this.towers = [];
-        this.bullets = [];
+        this.regions = [];
+        this.active = 0;
+        this.provisionAt = 0;
         this.bounty = DDOS_BOUNTY;
         this.fireRateMult = 1;
         this.waveGap = WAVE_GAP;
@@ -456,6 +587,7 @@ export class Game extends Scene
         this.spikeUntil = 0;
         this.latency = BASE_LATENCY;
         this.tiersHit = 0;
+        this.powerLost = [];
         this.brownoutTimer = undefined;
         this.selected = 'iam';
         this.unlocked = { iam: true, shield: false, waf: false, snowmobile: false };
@@ -465,15 +597,12 @@ export class Game extends Scene
         this.lastWaveText = '';
         this.sfxAt = {};
 
+        //  One background behind every hall — the halls only draw the floor up.
         this.add.image(512, 384, 'background');
 
-        this.drawFloor();
-        this.route = this.drawRoute();
-        this.drawIngress();
-        this.drawOrigin();
-        this.drawDecor();
-        this.drawPads();
         this.drawHud();
+        this.addRegion(0);
+        this.showRegion(0);
         this.buildDebugMenu();
 
         //  Build phase: nothing spawns until the player has had time to spend
@@ -486,7 +615,11 @@ export class Game extends Scene
 
         //  ESC and restarts both come through here. Without it the loop keeps
         //  playing under the main menu, and a second run stacks a second copy.
-        this.events.once('shutdown', () => this.killMusic());
+        this.events.once('shutdown', () => {
+            this.killMusic();
+            //  Capture is global, so leaving it on would swallow TAB on the menu.
+            this.input.keyboard?.removeCapture('TAB');
+        });
 
         this.input.keyboard?.once('keydown-ESC', () => {
             this.scene.start('MainMenu');
@@ -496,6 +629,10 @@ export class Game extends Scene
         this.input.keyboard?.on('keydown-TWO', () => this.pick('shield'));
         this.input.keyboard?.on('keydown-THREE', () => this.pick('waf'));
         this.input.keyboard?.on('keydown-FOUR', () => this.pick('snowmobile'));
+
+        //  TAB cycles halls. Captured, or the browser moves focus off the canvas.
+        this.input.keyboard?.addCapture('TAB');
+        this.input.keyboard?.on('keydown-TAB', () => this.cycleRegion());
 
         //  Demoing this in a room full of people needs a kill switch. mute is
         //  on the global SoundManager, so it survives a scene restart.
@@ -510,12 +647,180 @@ export class Game extends Scene
         this.input.keyboard?.on('keydown-D', () => this.toggleDebug());
     }
 
+    // ── Regions ──────────────────────────────────────────────────────────
+
+    //  Build a hall and everything in it. Starts hidden; showRegion() puts it
+    //  on screen.
+    addRegion (index: number): Region
+    {
+        const layout = LAYOUTS[index % LAYOUTS.length];
+        const layer = this.add.layer().setDepth(1).setVisible(false);
+
+        //  Insertion order is render order for everything at depth 0 — the
+        //  layer depth-sorts with a stable sort — so the floor has to go down
+        //  before the trench, the trench before the pads, and so on.
+        this.drawFloor(layer, index);
+        const route = this.drawRoute(layer, layout);
+        this.drawIngress(layer, layout);
+        const integrityBar = this.drawOrigin(layer, layout);
+        this.drawDecor(layer, layout);
+
+        const region: Region = {
+            index,
+            name: hallName(index),
+            layout, layer, route, integrityBar,
+            towers: [], enemies: [], bullets: [], pads: [],
+            alertUntil: 0,
+            tab: null as unknown as Region['tab']
+        };
+
+        this.regions.push(region);
+        this.drawPads(region);
+        this.makeTab(region);
+
+        //  A hall provisioned at 40% integrity opens already degraded: the
+        //  damage is to the shared origin, not to the room it arrived in.
+        for (const slot of this.powerLost) this.shroudPower(region, slot);
+
+        return region;
+    }
+
+    //  Put one hall on screen and take the others off it.
+    //
+    //  Hidden halls keep updating, so their pads and towers are still live
+    //  input targets sitting under the visible ones. Input is switched off
+    //  explicitly rather than left to the renderer: with Phaser's topOnly
+    //  input, one stale pad in a hidden hall is enough to swallow every build
+    //  click. Free pads are tracked with a `free` data flag so re-arming a hall
+    //  cannot re-arm a slot that already has a tower on it.
+    showRegion (index: number)
+    {
+        if (index < 0 || index >= this.regions.length) return;
+
+        this.active = index;
+
+        for (const region of this.regions)
+        {
+            const on = region.index === index;
+
+            region.layer.setVisible(on);
+
+            for (const pad of region.pads)
+            {
+                if (!pad.getData('free')) continue;
+                if (on) pad.setInteractive({ useHandCursor: true });
+                else pad.disableInteractive();
+            }
+
+            for (const tower of region.towers)
+            {
+                if (on) tower.sprite.setInteractive({ useHandCursor: true });
+                else tower.sprite.disableInteractive();
+            }
+        }
+
+        this.showHint();
+        this.paintTabs(true);
+    }
+
+    cycleRegion ()
+    {
+        if (this.regions.length < 2) return;
+
+        this.sfx('sfx-ui-click', { volume: 0.7 });
+        this.showRegion((this.active + 1) % this.regions.length);
+    }
+
+    //  A new hall comes online. Only ever called during the quiet gap after a
+    //  wave, so switching the view to it abandons nothing.
+    provisionRegion ()
+    {
+        this.provisionAt = 0;
+
+        if (this.over || this.regions.length >= MAX_REGIONS) return;
+
+        const region = this.addRegion(this.regions.length);
+
+        //  Its integrity bar is a second readout of the same shared number.
+        this.showIntegrity();
+        this.showRegion(region.index);
+
+        this.sfx('sfx-region-up');
+        this.flashHud(`${region.name} ONLINE  ·  DATA HALL ${region.index + 1}  ·  TAB TO SWITCH`, '#38bdf8');
+        this.cameras.main.flash(260, 56, 189, 248);
+    }
+
+    // ── Region tabs ──────────────────────────────────────────────────────
+
+    //  One tab per hall, hidden while there is only one. Shows the hall name
+    //  and how many intruders are in it, goes red for a moment on a breach.
+    makeTab (region: Region)
+    {
+        const x = TAB_X + region.index * (TAB_W + TAB_GAP);
+
+        const box = this.add.rectangle(x, TAB_Y, TAB_W, TAB_H)
+            .setOrigin(0, 0.5)
+            .setStrokeStyle(1, PAD_LINE, 0.9)
+            .setDepth(10)
+            .setVisible(false)
+            .setInteractive({ useHandCursor: true });
+
+        const text = this.add.text(x + TAB_W / 2, TAB_Y, region.name, {
+            fontFamily: 'Arial Black', fontSize: 10, color: '#5c728a'
+        }).setOrigin(0.5).setDepth(11).setVisible(false);
+
+        box.on('pointerdown', () => {
+            if (this.over) return;
+            this.sfx('sfx-ui-click', { volume: 0.7 });
+            this.showRegion(region.index);
+        });
+
+        region.tab = { box, text, state: '' };
+    }
+
+    //  Runs every frame, so each tab is only actually repainted when what it
+    //  says changes — setColor and setText both redraw a text canvas.
+    paintTabs (force = false)
+    {
+        const many = this.regions.length > 1;
+
+        for (const region of this.regions)
+        {
+            const { box, text } = region.tab;
+
+            box.setVisible(many);
+            text.setVisible(many);
+
+            if (!many) continue;
+
+            const on = region.index === this.active;
+            const alert = this.time.now < region.alertUntil;
+            const inbound = region.enemies.length;
+
+            const state = `${on}|${alert}|${inbound}`;
+            if (!force && state === region.tab.state) continue;
+            region.tab.state = state;
+
+            const colour = alert ? RED : on ? ACCENT : inbound > 0 ? CYAN : PAD_LINE;
+
+            box.setStrokeStyle(on ? 2 : 1, colour, on || alert ? 1 : 0.7);
+            box.setFillStyle(colour, alert ? 0.4 : on ? 0.18 : 0);
+
+            text.setText(inbound > 0 ? `${region.name}  ${inbound}` : region.name);
+            text.setColor(alert ? '#ef4444' : on ? '#ff9900' : inbound > 0 ? '#38bdf8' : '#5c728a');
+            this.fitText(text, TAB_W - 8);
+        }
+    }
+
     // ── Map ──────────────────────────────────────────────────────────────
 
-    //  Raised floor: panels with seams, a few perforated for cold air.
-    drawFloor ()
+    //  Raised floor: panels with seams, a few perforated for cold air. The
+    //  perforation pattern is seeded off the hall index, so no two rooms have
+    //  their cold aisles in the same place.
+    drawFloor (layer: GameObjects.Layer, seed: number)
     {
         const g = this.add.graphics();
+        layer.add(g);
 
         for (let col = 0; col < COLS; col++)
         {
@@ -530,7 +835,7 @@ export class Game extends Scene
                 g.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
 
                 //  Deterministic "random" so the layout is stable across reloads.
-                if ((col * 31 + row * 17) % 7 === 0)
+                if ((col * 31 + row * 17 + seed * 5) % 7 === 0)
                 {
                     g.fillStyle(PERF, 0.5);
                     for (let dx = 16; dx < TILE - 8; dx += 12)
@@ -550,10 +855,11 @@ export class Game extends Scene
     }
 
     //  The cable trench the intruders follow. Returns the Path for followers.
-    drawRoute (): Phaser.Curves.Path
+    drawRoute (layer: GameObjects.Layer, layout: Layout): Phaser.Curves.Path
     {
-        const pts = WAYPOINTS.map(([c, r]) => new PhaserMath.Vector2(this.cx(c), this.cy(r)));
+        const pts = layout.waypoints.map(([c, r]) => new PhaserMath.Vector2(this.cx(c), this.cy(r)));
         const g = this.add.graphics();
+        layer.add(g);
 
         const stroke = (width: number, colour: number, alpha = 1) => {
             g.lineStyle(width, colour, alpha);
@@ -570,6 +876,7 @@ export class Game extends Scene
         stroke(52, TRENCH_LIP, 1);
         stroke(46, TRENCH, 1);
 
+        //  Not a display object, so it is not added to the layer.
         const path = this.add.path(pts[0].x, pts[0].y);
         for (let i = 1; i < pts.length; i++) path.lineTo(pts[i].x, pts[i].y);
 
@@ -582,35 +889,41 @@ export class Game extends Scene
     }
 
     //  Left edge: where the traffic comes in from.
-    drawIngress ()
+    drawIngress (layer: GameObjects.Layer, layout: Layout)
     {
-        const y = this.cy(1);
+        const y = this.cy(layout.ingressRow);
 
-        this.add.rectangle(10, y, 20, 56, RACK).setStrokeStyle(2, CYAN);
+        const box = this.add.rectangle(10, y, 20, 56, RACK).setStrokeStyle(2, CYAN);
 
         const led = this.add.circle(10, y, 4, CYAN);
         this.tweens.add({
             targets: led, alpha: 0.2, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.InOut'
         });
 
-        this.add.text(36, y - 34, 'INGRESS  ·  0.0.0.0/0', {
+        const label = this.add.text(36, y - 34, 'INGRESS  ·  0.0.0.0/0', {
             fontFamily: 'Arial', fontSize: 14, color: '#38bdf8'
         });
+
+        layer.add([box, led, label]);
     }
 
-    //  Right edge: the base you're defending.
-    drawOrigin ()
+    //  Right edge: the base you're defending. Every hall draws one, and every
+    //  one of them is a readout of the same shared integrity — there is a
+    //  single origin server behind all of them.
+    drawOrigin (layer: GameObjects.Layer, layout: Layout): GameObjects.Rectangle
     {
-        const x = 960;
-        const y = this.cy(7);
+        const x = ORIGIN_X;
+        const y = this.cy(layout.originRow);
 
-        this.add.rectangle(x, y, 112, 176, RACK).setStrokeStyle(2, GREEN);
+        const parts: GameObjects.GameObject[] = [];
+
+        parts.push(this.add.rectangle(x, y, 112, 176, RACK).setStrokeStyle(2, GREEN));
 
         const leds: GameObjects.Rectangle[] = [];
         for (let i = 0; i < 7; i++)
         {
             const uy = y - 72 + i * 24;
-            this.add.rectangle(x, uy, 92, 18, 0x16243a).setStrokeStyle(1, RACK_LIP);
+            parts.push(this.add.rectangle(x, uy, 92, 18, 0x16243a).setStrokeStyle(1, RACK_LIP));
             leds.push(this.add.rectangle(x + 36, uy, 5, 5, GREEN));
         }
 
@@ -624,48 +937,58 @@ export class Game extends Scene
             ease: 'Sine.InOut'
         });
 
-        this.add.text(x, y - 104, 'ORIGIN', {
+        parts.push(...leds);
+
+        parts.push(this.add.text(x, y - 104, 'ORIGIN', {
             fontFamily: 'Arial Black', fontSize: 16, color: '#22c55e'
-        }).setOrigin(0.5);
+        }).setOrigin(0.5));
 
         //  Integrity bar strapped to the front of the rack.
-        this.add.rectangle(x, y + 102, 104, 10, 0x16243a).setStrokeStyle(1, RACK_LIP);
-        this.integrityBar = this.add.rectangle(x - 50, y + 102, 100, 6, GREEN).setOrigin(0, 0.5);
+        parts.push(this.add.rectangle(x, y + 102, 104, 10, 0x16243a).setStrokeStyle(1, RACK_LIP));
+
+        const bar = this.add.rectangle(x - 50, y + 102, 100, 6, GREEN).setOrigin(0, 0.5);
+        parts.push(bar);
+
+        layer.add(parts);
+
+        return bar;
     }
 
     //  Cold-aisle racks and cooling plant. Pure decoration.
-    drawDecor ()
+    drawDecor (layer: GameObjects.Layer, layout: Layout)
     {
         const g = this.add.graphics();
+        layer.add(g);
+
         const leds: GameObjects.Rectangle[] = [];
 
-        const rack = (col: number, row: number, w: number, h: number) => {
-            const x = col * TILE + 4;
-            const y = FLOOR_Y + row * TILE + 8;
+        for (const spec of layout.decor)
+        {
+            const x = spec.col * TILE + 4;
+            const y = FLOOR_Y + spec.row * TILE + 8;
 
             g.fillStyle(RACK, 1);
-            g.fillRect(x, y, w, h);
+            g.fillRect(x, y, spec.w, spec.h);
             g.lineStyle(1, RACK_LIP, 1);
-            g.strokeRect(x, y, w, h);
+            g.strokeRect(x, y, spec.w, spec.h);
 
-            for (let uy = y + 8; uy < y + h - 6; uy += 12)
+            for (let uy = y + 8; uy < y + spec.h - 6; uy += 12)
             {
                 g.lineStyle(1, RACK_LIP, 0.6);
-                g.lineBetween(x + 6, uy, x + w - 6, uy);
-                leds.push(this.add.rectangle(x + w - 12, uy, 4, 4, (uy % 24 === 0) ? CYAN : GREEN));
+                g.lineBetween(x + 6, uy, x + spec.w - 6, uy);
+                leds.push(this.add.rectangle(x + spec.w - 12, uy, 4, 4, (uy % 24 === 0) ? CYAN : GREEN));
             }
-        };
 
-        rack(12, 0, 248, 48);   // top-right row
-        rack(8, 10, 312, 48);   // bottom row
+            //  Row 0 has nothing above it to label into, so that one sits just
+            //  inside the tile instead.
+            const labelY = spec.row === 0 ? FLOOR_Y + 2 : FLOOR_Y + spec.row * TILE - 12;
 
-        this.add.text(12 * TILE + 6, FLOOR_Y + 2, 'RACK A1-A4', {
-            fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
-        });
+            layer.add(this.add.text(spec.col * TILE + 6, labelY, spec.label, {
+                fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
+            }));
+        }
 
-        this.add.text(8 * TILE + 6, FLOOR_Y + 10 * TILE - 12, 'RACK B1-B5', {
-            fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
-        });
+        layer.add(leds);
 
         this.tweens.add({
             targets: leds,
@@ -679,16 +1002,17 @@ export class Game extends Scene
     }
 
     //  Buildable slots = free tiles that touch the cable trench.
-    drawPads ()
+    drawPads (region: Region)
     {
+        const layout = region.layout;
         const occupied = new Set<string>();
         const onPath = new Set<string>();
 
         //  Walk each straight segment and mark every cell it crosses.
-        for (let i = 0; i < WAYPOINTS.length - 1; i++)
+        for (let i = 0; i < layout.waypoints.length - 1; i++)
         {
-            const [c1, r1] = WAYPOINTS[i];
-            const [c2, r2] = WAYPOINTS[i + 1];
+            const [c1, r1] = layout.waypoints[i];
+            const [c2, r2] = layout.waypoints[i + 1];
             const steps = Math.max(Math.abs(c2 - c1), Math.abs(r2 - r1));
             const dc = Math.sign(c2 - c1);
             const dr = Math.sign(r2 - r1);
@@ -701,7 +1025,15 @@ export class Game extends Scene
             }
         }
 
-        for (const [c, r] of RACK_CELLS) occupied.add(`${c},${r}`);
+        for (const [c, r] of layout.rackCells) occupied.add(`${c},${r}`);
+
+        //  The origin rack itself, derived from the row it sits on so a mirrored
+        //  layout can't forget to move it.
+        for (let r = layout.originRow - 1; r <= layout.originRow + 1; r++)
+        {
+            occupied.add(`14,${r}`);
+            occupied.add(`15,${r}`);
+        }
 
         for (let col = 0; col < COLS; col++)
         {
@@ -712,14 +1044,14 @@ export class Game extends Scene
                 const touchesPath = onPath.has(`${col - 1},${row}`) || onPath.has(`${col + 1},${row}`)
                     || onPath.has(`${col},${row - 1}`) || onPath.has(`${col},${row + 1}`);
 
-                if (touchesPath) this.makePad(col, row);
+                if (touchesPath) this.makePad(region, col, row);
             }
         }
     }
 
     //  One buildable slot: hover tints it in the armed tower's colour, click
     //  builds it.
-    makePad (col: number, row: number)
+    makePad (region: Region, col: number, row: number)
     {
         const x = this.cx(col);
         const y = this.cy(row);
@@ -728,19 +1060,30 @@ export class Game extends Scene
             .setStrokeStyle(1, PAD_LINE, 0.9)
             .setInteractive({ useHandCursor: true });
 
+        //  showRegion() re-arms every free pad in the hall it switches to, and
+        //  this is how it knows which ones are free.
+        pad.setData('free', true);
+
+        region.layer.add(pad);
+        region.pads.push(pad);
+
         pad.on('pointerover', () => {
+            if (region !== this.current()) return;
+
             //  Restyled on every hover because the pick can change between one
             //  hover and the next.
             const spec = TOWER_SPECS[this.selected];
             pad.setFillStyle(spec.colour, 0.16).setStrokeStyle(1, spec.colour, 0.9);
         });
 
+        //  Deliberately not guarded on the active hall: this only ever resets
+        //  styles, and it is what clears a hover left behind by a switch.
         pad.on('pointerout', () => {
             pad.setFillStyle(BG, 0).setStrokeStyle(1, PAD_LINE, 0.9);
         });
 
         pad.on('pointerdown', () => {
-            if (this.over) return;
+            if (this.over || region !== this.current()) return;
 
             const spec = TOWER_SPECS[this.selected];
 
@@ -753,16 +1096,17 @@ export class Game extends Scene
             this.budget -= spec.cost;
             this.budgetText.setText(`$${this.budget}`);
 
+            pad.setData('free', false);
             pad.disableInteractive();
             pad.setFillStyle(BG, 0).setStrokeStyle(1, spec.colour, 0.4);
 
             //  The pad stays around underneath, disabled, so selling can hand
             //  the slot straight back.
-            this.buildTower(x, y, spec, pad);
+            this.buildTower(region, x, y, spec, pad);
         });
     }
 
-    buildTower (x: number, y: number, spec: TowerSpec, pad: GameObjects.Rectangle)
+    buildTower (region: Region, x: number, y: number, spec: TowerSpec, pad: GameObjects.Rectangle)
     {
         //  The art is a 64x64 emplacement on a 50x50 baseplate, so it drops
         //  onto a 64px grid tile at scale 1 — no fitting, no label needed.
@@ -776,7 +1120,7 @@ export class Game extends Scene
         this.sfx('sfx-tower-build');
 
         const tower: Tower = {
-            x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad
+            region, x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad
         };
 
         //  Hovering a built tower shows what it sells for.
@@ -785,7 +1129,11 @@ export class Game extends Scene
             backgroundColor: '#0b1120', padding: { x: 4, y: 2 }
         }).setOrigin(0.5).setDepth(11).setVisible(false);
 
+        region.layer.add([sprite, tag]);
+
         sprite.on('pointerover', () => {
+            if (region !== this.current()) return;
+
             sprite.setTint(0x86efac);
             tag.setVisible(true);
         });
@@ -796,12 +1144,12 @@ export class Game extends Scene
         });
 
         sprite.on('pointerdown', () => {
-            if (this.over || tower.sold) return;
+            if (this.over || tower.sold || region !== this.current()) return;
             tag.destroy();
             this.sellTower(tower);
         });
 
-        this.towers.push(tower);
+        region.towers.push(tower);
     }
 
     //  Restore a tower's resting look: dark while browned out, plain otherwise.
@@ -816,8 +1164,10 @@ export class Game extends Scene
     //  Refund half the build cost and re-arm the pad underneath.
     sellTower (tower: Tower)
     {
+        const region = tower.region;
+
         tower.sold = true;
-        this.towers = this.towers.filter(t => t !== tower);
+        region.towers = region.towers.filter(t => t !== tower);
 
         this.sfx('sfx-tower-sell');
 
@@ -828,12 +1178,15 @@ export class Game extends Scene
         const { x, y } = tower;
         tower.sprite.destroy();
 
+        tower.pad.setData('free', true);
         tower.pad.setInteractive({ useHandCursor: true });
         tower.pad.setFillStyle(BG, 0).setStrokeStyle(1, PAD_LINE, 0.9);
 
         const refundText = this.add.text(x, y - 24, `+$${refund(tower.spec)}`, {
             fontFamily: 'Arial Black', fontSize: 13, color: '#22c55e'
         }).setOrigin(0.5).setDepth(11);
+
+        region.layer.add(refundText);
 
         this.tweens.add({
             targets: refundText, y: y - 56, alpha: 0, duration: 700,
@@ -842,7 +1195,7 @@ export class Game extends Scene
     }
 
     //  Clicking a HUD button (or pressing its number) buys the tower if it is
-    //  still locked, otherwise just arms it.
+    //  still locked, otherwise just arms it. Unlocks apply to every hall.
     pick (kind: TowerKind)
     {
         if (this.over) return;
@@ -928,10 +1281,16 @@ export class Game extends Scene
 
     // ── Combat ───────────────────────────────────────────────────────────
 
-    //  Waves arrive as a burst of closely-spaced mobs, then a quiet gap.
+    //  Waves arrive as a burst of closely-spaced mobs, then a quiet gap. Every
+    //  hall gets the whole wave: one spawn timer, and each tick drops a mob in
+    //  every hall at once.
     startWave ()
     {
         if (this.over) return;
+
+        //  A forced wave (debug) can skip the gap the next hall was due to open
+        //  in, so make sure it exists before the wave that has to defend it.
+        if (this.provisionAt > 0) this.provisionRegion();
 
         this.wave++;
 
@@ -956,6 +1315,7 @@ export class Game extends Scene
         if (flood > 0) parts.push(`DDoS x${flood}`);
         if (flyers > 0) parts.push(`SQLi x${flyers}`);
         if (tanks > 0) parts.push(`TANK x${tanks}`);
+        if (this.regions.length > 1) parts.push(`IN ${this.regions.length} HALLS`);
         this.waveLabel = `WAVE ${this.wave}  ·  ${parts.join('  ·  ')}`;
 
         if (tanks > 0)
@@ -982,7 +1342,7 @@ export class Game extends Scene
         this.time.addEvent({
             delay: NINJA_SPACING,
             repeat: ninjas - 1,
-            callback: () => this.spawnNinja()
+            callback: () => { for (const r of this.regions) this.spawnNinja(r); }
         });
 
         if (flood > 0)
@@ -990,7 +1350,7 @@ export class Game extends Scene
             this.time.addEvent({
                 delay: SWARM_SPACING,
                 repeat: flood - 1,
-                callback: () => this.spawnDdos()
+                callback: () => { for (const r of this.regions) this.spawnDdos(r); }
             });
         }
 
@@ -999,7 +1359,7 @@ export class Game extends Scene
             this.time.addEvent({
                 delay: INJECT_SPACING,
                 repeat: flyers - 1,
-                callback: () => this.spawnInjection()
+                callback: () => { for (const r of this.regions) this.spawnInjection(r); }
             });
         }
 
@@ -1008,7 +1368,7 @@ export class Game extends Scene
             this.time.addEvent({
                 delay: TANK_SPACING,
                 repeat: tanks - 1,
-                callback: () => this.spawnTank()
+                callback: () => { for (const r of this.regions) this.spawnTank(r); }
             });
         }
 
@@ -1022,9 +1382,20 @@ export class Game extends Scene
             tanks * TANK_SPACING
         );
 
+        //  Every tenth wave is the last one before a new hall, so that gap runs
+        //  long: the hall opens empty, and building it out of the shared wallet
+        //  is the whole cost of the expansion.
+        const expanding = this.wave % REGION_EVERY === 0 && this.regions.length < MAX_REGIONS;
+        const gap = this.waveGap + (expanding ? REGION_PREP : 0);
+
         this.burstEndsAt = this.time.now + burst;
 
-        this.spawner = this.time.delayedCall(burst + this.waveGap, () => this.startWave());
+        //  Provisioned just after the burst lands rather than at the start of
+        //  the gap, so the reveal is not competing with the wave that is still
+        //  spawning.
+        this.provisionAt = expanding ? this.time.now + burst + 400 : 0;
+
+        this.spawner = this.time.delayedCall(burst + gap, () => this.startWave());
     }
 
     //  One line that either lists what is inbound or counts down to it.
@@ -1066,21 +1437,22 @@ export class Game extends Scene
     }
 
     //  The default intruder. Walks the trench like the flood does, but dashes
-    //  cloaked every couple of seconds — see cloakDash() and update().
-    spawnNinja ()
+    //  cloaked every couple of seconds — see cloakDash() and updateRegion().
+    spawnNinja (region: Region)
     {
         if (this.over) return;
 
         const maxHp = NINJA_HP + (this.wave - 1) * 7;
-        const start = this.route.getStartPoint();
-        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-default')
+        const start = region.route.getStartPoint();
+        const obj = this.add.follower(region.route, start.x, start.y, 'tortoise-default')
             .setDepth(6)
             .setScale(NINJA_SCALE);
 
         const barBg = this.add.rectangle(0, 0, 30, 5, 0x000000, 0.6).setDepth(7);
         const bar = this.add.rectangle(0, 0, 28, 3, RED).setOrigin(0, 0.5).setDepth(7);
 
-        const enemy = this.addEnemy({
+        const enemy = this.addEnemy(region, {
+            region,
             obj, follower: obj, flying: false, boss: false,
             hp: maxHp, maxHp, damage: NINJA_DAMAGE, bountyMult: NINJA_BOUNTY_MULT,
             barBg, bar, barW: 28, barOffset: 30,
@@ -1093,7 +1465,7 @@ export class Game extends Scene
         });
 
         obj.startFollow({
-            duration: (this.route.getLength() / NINJA_SPEED) * 1000,
+            duration: (region.route.getLength() / NINJA_SPEED) * 1000,
             positionOnPath: true,
             rotateToPath: true,
             onComplete: () => this.breach(enemy)
@@ -1102,20 +1474,21 @@ export class Game extends Scene
 
     //  Boss. Same trench as everything else on the ground, just far bigger and
     //  far slower, and it hurts badly if it gets through.
-    spawnTank ()
+    spawnTank (region: Region)
     {
         if (this.over) return;
 
         const maxHp = TANK_HP + (this.wave - 1) * 140;
-        const start = this.route.getStartPoint();
-        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-tank')
+        const start = region.route.getStartPoint();
+        const obj = this.add.follower(region.route, start.x, start.y, 'tortoise-tank')
             .setDepth(5)
             .setScale(TANK_SCALE);
 
         const barBg = this.add.rectangle(0, 0, 56, 7, 0x000000, 0.7).setDepth(7);
         const bar = this.add.rectangle(0, 0, 54, 5, RED).setOrigin(0, 0.5).setDepth(7);
 
-        const enemy = this.addEnemy({
+        const enemy = this.addEnemy(region, {
+            region,
             obj, follower: obj, flying: false, boss: true,
             hp: maxHp, maxHp, damage: TANK_DAMAGE, bountyMult: TANK_BOUNTY_MULT,
             barBg, bar, barW: 54, barOffset: 48,
@@ -1124,7 +1497,7 @@ export class Game extends Scene
         });
 
         obj.startFollow({
-            duration: (this.route.getLength() / TANK_SPEED) * 1000,
+            duration: (region.route.getLength() / TANK_SPEED) * 1000,
             positionOnPath: true,
             rotateToPath: true,
             onComplete: () => this.breach(enemy)
@@ -1158,7 +1531,7 @@ export class Game extends Scene
         const tween = enemy.follower?.pathTween;
         if (tween) tween.timeScale = NINJA_DASH_MULT;
 
-        this.smokePuff(enemy.obj.x, enemy.obj.y);
+        this.smokePuff(enemy);
     }
 
     uncloak (enemy: Enemy)
@@ -1174,16 +1547,17 @@ export class Game extends Scene
         const tween = enemy.follower?.pathTween;
         if (tween) tween.timeScale = 1;
 
-        this.smokePuff(enemy.obj.x, enemy.obj.y);
+        this.smokePuff(enemy);
     }
 
-    smokePuff (x: number, y: number)
+    smokePuff (enemy: Enemy)
     {
         //  Both ends of a dash puff, and every shinobi does it every 2.4s, so
         //  this is throttled hard and mixed low.
         this.sfx('sfx-ninja-dash', { volume: 0.6, minGap: 130 });
 
-        const puff = this.add.circle(x, y, 10, 0x94a3b8, 0.45).setDepth(7);
+        const puff = this.add.circle(enemy.obj.x, enemy.obj.y, 10, 0x94a3b8, 0.45).setDepth(7);
+        enemy.region.layer.add(puff);
 
         this.tweens.add({
             targets: puff, scale: 2.2, alpha: 0, duration: 320,
@@ -1191,28 +1565,32 @@ export class Game extends Scene
         });
     }
 
-    //  Register a mob and hand it back, so callers can wire up callbacks that
-    //  close over it.
-    addEnemy (enemy: Enemy)
+    //  Register a mob in its hall and hand it back, so callers can wire up
+    //  callbacks that close over it.
+    addEnemy (region: Region, enemy: Enemy)
     {
-        this.enemies.push(enemy);
+        region.enemies.push(enemy);
+        region.layer.add([enemy.obj, enemy.barBg, enemy.bar]);
+        if (enemy.shadow) region.layer.add(enemy.shadow);
+
         return enemy;
     }
 
-    spawnDdos ()
+    spawnDdos (region: Region)
     {
         if (this.over) return;
 
         const maxHp = DDOS_HP + (this.wave - 1) * 3;
-        const start = this.route.getStartPoint();
-        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-ddos')
+        const start = region.route.getStartPoint();
+        const obj = this.add.follower(region.route, start.x, start.y, 'tortoise-ddos')
             .setDepth(5)
             .setScale(DDOS_SCALE);
 
         const barBg = this.add.rectangle(0, 0, 20, 4, 0x000000, 0.6).setDepth(6);
         const bar = this.add.rectangle(0, 0, 18, 2, RED).setOrigin(0, 0.5).setDepth(6);
 
-        const enemy = this.addEnemy({
+        const enemy = this.addEnemy(region, {
+            region,
             obj, follower: obj, flying: false, boss: false,
             hp: maxHp, maxHp, damage: DDOS_DAMAGE, bountyMult: 1,
             barBg, bar, barW: 18, barOffset: 18,
@@ -1221,7 +1599,7 @@ export class Game extends Scene
         });
 
         obj.startFollow({
-            duration: (this.route.getLength() / DDOS_SPEED) * 1000,
+            duration: (region.route.getLength() / DDOS_SPEED) * 1000,
             positionOnPath: true,
             //  The art faces right, which matches 0 degrees, so no offset needed.
             rotateToPath: true,
@@ -1241,8 +1619,8 @@ export class Game extends Scene
 
     //  SQL injection flyer. No path — it enters anywhere down the left edge
     //  and wanders toward the origin, re-rolling its heading every few hundred
-    //  ms, so no fixed set of pads can cover it. update() drives it.
-    spawnInjection ()
+    //  ms, so no fixed set of pads can cover it. updateRegion() drives it.
+    spawnInjection (region: Region)
     {
         if (this.over) return;
 
@@ -1258,7 +1636,8 @@ export class Game extends Scene
         const barBg = this.add.rectangle(0, 0, 34, 5, 0x000000, 0.6).setDepth(9);
         const bar = this.add.rectangle(0, 0, 32, 3, VIOLET).setOrigin(0, 0.5).setDepth(9);
 
-        this.addEnemy({
+        this.addEnemy(region, {
+            region,
             obj, flying: true, boss: false,
             hp: maxHp, maxHp, damage: INJECT_DAMAGE, bountyMult: INJECT_BOUNTY_MULT,
             barBg, bar, barW: 32, barOffset: 28, shadow,
@@ -1292,7 +1671,7 @@ export class Game extends Scene
     steer (enemy: Enemy)
     {
         const toOrigin = PhaserMath.Angle.Between(
-            enemy.obj.x, enemy.obj.y, ORIGIN_X, this.cy(ORIGIN_ROW)
+            enemy.obj.x, enemy.obj.y, ORIGIN_X, this.cy(enemy.region.layout.originRow)
         );
 
         const spread = PhaserMath.DegToRad(INJECT_SPREAD);
@@ -1303,26 +1682,39 @@ export class Game extends Scene
         enemy.turnAt = this.time.now + PhaserMath.Between(INJECT_TURN_MIN, INJECT_TURN_MAX);
     }
 
-    //  Push this.integrity to the HUD readout and the bar on the origin rack.
+    //  Push this.integrity to the HUD readout and to the bar on every hall's
+    //  origin rack — one origin server, several views of it.
     showIntegrity ()
     {
         this.integrityText.setText(`INTEGRITY ${this.integrity}%`);
         this.integrityText.setColor(this.integrity <= 30 ? '#ef4444' : '#8ea3b8');
-        this.integrityBar.width = this.integrity;
-        this.integrityBar.setFillStyle(this.integrity <= 30 ? RED : this.integrity <= 60 ? ACCENT : GREEN);
+
+        const colour = this.integrity <= 30 ? RED : this.integrity <= 60 ? ACCENT : GREEN;
+
+        for (const region of this.regions)
+        {
+            region.integrityBar.width = this.integrity;
+            region.integrityBar.setFillStyle(colour);
+        }
     }
 
-    //  Enemy reached the origin server.
+    //  Enemy reached the origin server. Which hall it did that in makes no
+    //  difference to the damage — the origin is shared.
     breach (enemy: Enemy)
     {
         if (!enemy.alive || this.over) return;
 
+        const region = enemy.region;
         const { x, y } = enemy.obj;
         const damage = enemy.damage;
         this.killEnemy(enemy, false);
 
         this.integrity = Math.max(0, this.integrity - damage);
         this.showIntegrity();
+
+        //  Light the hall's tab up so a breach you cannot see still tells you
+        //  where it happened.
+        region.alertUntil = this.time.now + REGION_ALERT_MS;
 
         //  A flyer landing on the origin is a much bigger event than one more
         //  packet in the flood.
@@ -1344,14 +1736,23 @@ export class Game extends Scene
         this.cameras.main.shake(heavy ? 320 : 180, heavy ? 0.012 : 0.006);
         this.cameras.main.flash(120, 239, 68, 68);
 
-        //  Floating damage readout.
+        //  Floating damage readout. It lives in the hall it happened in, so a
+        //  breach off screen gets a banner instead — but only for the heavy
+        //  ones, or the flood would fill the HUD with them.
         const hit = this.add.text(x, y - 30, `-${damage}% INTEGRITY`, {
             fontFamily: 'Arial Black', fontSize: 13, color: '#ef4444'
         }).setOrigin(0.5).setDepth(9);
 
+        region.layer.add(hit);
+
         this.tweens.add({
             targets: hit, y: y - 70, alpha: 0, duration: 900, onComplete: () => hit.destroy()
         });
+
+        if (heavy && region !== this.current())
+        {
+            this.flashHud(`BREACH IN ${region.name}  ·  -${damage}% INTEGRITY`);
+        }
 
         if (this.integrity <= 0)
         {
@@ -1366,7 +1767,8 @@ export class Game extends Scene
     // ── Damage side effects ──────────────────────────────────────────────
 
     //  Every breach: the region gets slow for a moment. Towers fire late and
-    //  the p99 readout jumps, then eases back to the new baseline.
+    //  the p99 readout jumps, then eases back to the new baseline. Every hall
+    //  slows down together — it is one control plane.
     latencySpike ()
     {
         const peak = 180 + (100 - this.integrity) * 6;
@@ -1401,11 +1803,11 @@ export class Game extends Scene
     {
         const tiers: { at: number, run: () => void }[] = [
             { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
-            { at: 80, run: () => this.killPowerDomain(12, 0, 4, 3, 'PWR-A') },
+            { at: 80, run: () => this.killPowerDomain(0) },
             { at: 70, run: () => { this.bounty = 6; this.flashHud('BILLING THROTTLED  ·  BOUNTY $6'); } },
             { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(7500); } },
             { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
-            { at: 40, run: () => { this.killPowerDomain(0, 8, 4, 3, 'PWR-B'); this.spikeMs = 4000; } },
+            { at: 40, run: () => { this.killPowerDomain(1); this.spikeMs = 4000; } },
             { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(5500); } },
             { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
             { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(3500); this.flashHud('REGION FAILING'); } }
@@ -1430,25 +1832,38 @@ export class Game extends Scene
         });
     }
 
-    //  A rack region loses power: dimmed tiles and an offline label.
-    killPowerDomain (col: number, row: number, w: number, h: number, name: string)
+    //  A power domain fails. One grid feeds every hall, so it goes dark in all
+    //  of them — and is remembered, so a hall provisioned later opens dark too.
+    killPowerDomain (slot: number)
     {
+        this.powerLost.push(slot);
+
+        for (const region of this.regions) this.shroudPower(region, slot);
+    }
+
+    //  Dimmed tiles and an offline label over one hall's power domain.
+    shroudPower (region: Region, slot: number)
+    {
+        const [col, row] = region.layout.power[slot];
         const x = col * TILE;
         const y = FLOOR_Y + row * TILE;
 
-        const shroud = this.add.rectangle(x, y, w * TILE, h * TILE, 0x000000, 0)
+        const shroud = this.add.rectangle(x, y, PWR_W * TILE, PWR_H * TILE, 0x000000, 0)
             .setOrigin(0, 0)
             .setDepth(3);
 
-        const label = this.add.text(x + w * TILE / 2, y + h * TILE / 2, `${name}\nOFFLINE`, {
+        const label = this.add.text(x + PWR_W * TILE / 2, y + PWR_H * TILE / 2, `${PWR_NAMES[slot]}\nOFFLINE`, {
             fontFamily: 'Arial Black', fontSize: 14, color: '#ef4444', align: 'center'
         }).setOrigin(0.5).setDepth(3).setAlpha(0);
+
+        region.layer.add([shroud, label]);
 
         this.tweens.add({ targets: shroud, fillAlpha: 0.62, duration: 500 });
         this.tweens.add({ targets: label, alpha: 0.75, duration: 500, delay: 200 });
     }
 
-    //  Red edge pulse once the region is critical.
+    //  Red edge pulse once the region is critical. Screen furniture, not board
+    //  furniture, so it is not inside a hall's layer.
     startVignette ()
     {
         this.vignette = this.add.rectangle(512, 384, 1016, 760)
@@ -1460,16 +1875,21 @@ export class Game extends Scene
         });
     }
 
-    //  Random towers drop offline for a moment.
+    //  Random towers drop offline for a moment, anywhere in the region.
     startBrownouts ()
     {
         this.brownoutTimer = this.time.addEvent({
             delay: BROWNOUT_EVERY,
             loop: true,
             callback: () => {
-                if (this.over || this.towers.length === 0) return;
+                if (this.over) return;
 
-                const live = this.towers.filter(t => !t.offline);
+                const live: Tower[] = [];
+                for (const region of this.regions)
+                {
+                    for (const tower of region.towers) if (!tower.offline) live.push(tower);
+                }
+
                 if (live.length === 0) return;
 
                 const t = PhaserMath.RND.pick(live);
@@ -1494,8 +1914,8 @@ export class Game extends Scene
         this.waveGap = ms;
     }
 
-    //  Brief banner under the HUD when a tier trips, a wave escalates, or a
-    //  boss goes down.
+    //  Brief banner under the HUD when a tier trips, a wave escalates, a hall
+    //  comes online, or a boss goes down.
     flashHud (message: string, colour = '#ef4444')
     {
         const banner = this.add.text(512, 92, message, {
@@ -1524,7 +1944,7 @@ export class Game extends Scene
         }
 
         //  Covers both routes a boss leaves the board by: killed, or reaching
-        //  the origin. Once the last one is gone the bed comes back.
+        //  the origin. Once the last one in any hall is gone the bed comes back.
         if (enemy.boss) this.refreshMusic();
 
         if (!reward) return;
@@ -1551,14 +1971,15 @@ export class Game extends Scene
         this.sfx(spec.fireSfx, { volume: spec.fireVolume, minGap: spec.fireGap });
 
         this.kick(tower, angle);
-        this.muzzle(tower.x, tower.y, angle);
-        this.tracer(tower.x, tower.y, tx, ty, angle);
+        this.muzzle(tower.region, tower.x, tower.y, angle);
+        this.tracer(tower.region, tower.x, tower.y, tx, ty, angle);
 
         const bullet = this.add.image(tower.x, tower.y, spec.shot).setDepth(6);
+        tower.region.layer.add(bullet);
 
         if (spec.shotFacing) bullet.setRotation(angle);
 
-        this.bullets.push({
+        tower.region.bullets.push({
             obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed,
             facing: spec.shotFacing
         });
@@ -1577,10 +1998,12 @@ export class Game extends Scene
     }
 
     //  Bore bloom. Shared by projectile and beam towers, so the discharge and
-    //  the shot always start from the same flare.
-    muzzle (x: number, y: number, angle: number, to = 2.2)
+    //  the shot always start from the same flare. Layered into the firing hall
+    //  so an off-screen tower's flare stays off screen.
+    muzzle (region: Region, x: number, y: number, angle: number, to = 2.2)
     {
         const bloom = this.add.image(x, y, 'shot-muzzle').setRotation(angle).setDepth(7);
+        region.layer.add(bloom);
 
         this.tweens.add({
             targets: bloom, scale: to, alpha: 0, duration: 170,
@@ -1590,7 +2013,7 @@ export class Game extends Scene
 
     //  The lane: stretched (not tiled) from bore to target and gone in 120ms,
     //  which is short enough that Shield's 120ms cadence never stacks two.
-    tracer (x: number, y: number, tx: number, ty: number, angle: number)
+    tracer (region: Region, x: number, y: number, tx: number, ty: number, angle: number)
     {
         const lane = this.add.image(x, y, 'shot-tracer')
             .setOrigin(0, 0.5)
@@ -1598,6 +2021,8 @@ export class Game extends Scene
             .setDisplaySize(PhaserMath.Distance.Between(x, y, tx, ty), 8)
             .setDepth(5)
             .setAlpha(0.55);
+
+        region.layer.add(lane);
 
         this.tweens.add({
             targets: lane, alpha: 0, duration: 120, onComplete: () => lane.destroy()
@@ -1609,6 +2034,7 @@ export class Game extends Scene
     fireBeam (tower: Tower, target: Enemy)
     {
         const spec = tower.spec;
+        const region = tower.region;
         const angle = PhaserMath.Angle.Between(tower.x, tower.y, target.obj.x, target.obj.y);
         const len = spec.range + BEAM_OVERSHOOT;
         const cos = Math.cos(angle);
@@ -1617,10 +2043,11 @@ export class Game extends Scene
         this.kick(tower, angle);
 
         //  Project each mob onto the beam: `along` is how far down the lance it
-        //  sits, `off` is how far off the centre line.
+        //  sits, `off` is how far off the centre line. Only this hall's mobs —
+        //  a lance cannot reach into the room next door.
         const struck: Enemy[] = [];
 
-        for (const e of this.enemies)
+        for (const e of region.enemies)
         {
             if (!e.alive) continue;
             if (e.cloaked && !spec.seesCloaked) continue;
@@ -1649,6 +2076,10 @@ export class Game extends Scene
             .setRotation(angle)
             .setDepth(7);
 
+        const flash = this.add.circle(tower.x, tower.y, 15, 0xffffff, 0.85).setDepth(8);
+
+        region.layer.add([glow, core, flash]);
+
         this.tweens.add({
             targets: core, scaleY: 0.08, alpha: 0, duration: 260, ease: 'Cubic.In',
             onComplete: () => core.destroy()
@@ -1659,13 +2090,15 @@ export class Game extends Scene
             onComplete: () => glow.destroy()
         });
 
-        this.muzzle(tower.x, tower.y, angle, 3.2);
+        this.muzzle(region, tower.x, tower.y, angle, 3.2);
 
         //  Decoration: `struck` already took the damage the instant the tower
         //  fired. The slug just gives the discharge something to follow.
         const slug = this.add.image(tower.x, tower.y, spec.shot)
             .setRotation(angle)
             .setDepth(7);
+
+        region.layer.add(slug);
 
         this.tweens.add({
             targets: slug,
@@ -1681,12 +2114,13 @@ export class Game extends Scene
         this.cameras.main.shake(90, 0.002);
     }
 
-    nearestEnemy (x: number, y: number, range: number, seesCloaked: boolean): Enemy | null
+    //  Towers only see their own hall.
+    nearestEnemy (region: Region, x: number, y: number, range: number, seesCloaked: boolean): Enemy | null
     {
         let best: Enemy | null = null;
         let bestDist = range;
 
-        for (const e of this.enemies)
+        for (const e of region.enemies)
         {
             if (!e.alive) continue;
             if (e.cloaked && !seesCloaked) continue;
@@ -1707,13 +2141,17 @@ export class Game extends Scene
     {
         this.over = true;
         this.spawner.remove();
+        this.provisionAt = 0;
 
         //  Every firing sound is now dead, so this has the mix to itself. The
         //  SoundManager is global, so the tail carries into the GameOver scene.
         this.stopMusic(500);
         this.sfx('sfx-region-down');
 
-        for (const e of this.enemies) if (e.alive) e.follower?.pauseFollow();
+        for (const region of this.regions)
+        {
+            for (const e of region.enemies) if (e.alive) e.follower?.pauseFollow();
+        }
 
         this.cameras.main.shake(400, 0.012);
         this.time.delayedCall(600, () => this.scene.start('GameOver', { score: this.score }));
@@ -1727,10 +2165,27 @@ export class Game extends Scene
 
         this.updateWaveText();
 
+        //  A new hall comes online mid-gap — see startWave().
+        if (this.provisionAt > 0 && this.time.now >= this.provisionAt) this.provisionRegion();
+
+        //  Cooldown is stretched by cooling loss and by any active latency
+        //  spike, both of which are region-wide.
+        const spiking = this.time.now < this.spikeUntil;
+        const penalty = this.fireRateMult * (spiking ? LATENCY_PENALTY : 1);
+
+        for (const region of this.regions) this.updateRegion(region, delta, dt, penalty);
+
+        this.paintTabs();
+    }
+
+    //  One hall's simulation. Runs whether or not the hall is on screen: the
+    //  hall you are not watching is exactly as dangerous as the one you are.
+    updateRegion (region: Region, delta: number, dt: number, penalty: number)
+    {
         //  Shinobi cloak on their own clock. cloakAt of 0 means "already
         //  cloaked", uncloakAt of 0 means "not cloaked", so mobs that never
         //  cloak (flood, flyers) sit at 0/0 and are skipped by both branches.
-        for (const e of this.enemies)
+        for (const e of region.enemies)
         {
             if (!e.alive) continue;
 
@@ -1739,7 +2194,7 @@ export class Game extends Scene
         }
 
         //  Flyers move themselves — no path, so this is their whole AI.
-        for (const e of this.enemies)
+        for (const e of region.enemies)
         {
             if (!e.alive || !e.flying) continue;
 
@@ -1761,7 +2216,7 @@ export class Game extends Scene
         }
 
         //  Health bars ride along above each enemy.
-        for (const e of this.enemies)
+        for (const e of region.enemies)
         {
             if (!e.alive) continue;
 
@@ -1772,11 +2227,7 @@ export class Game extends Scene
         }
 
         //  Towers acquire the closest target in range and shoot on cooldown.
-        //  Cooldown is stretched by cooling loss and by any active latency spike.
-        const spiking = this.time.now < this.spikeUntil;
-        const penalty = this.fireRateMult * (spiking ? LATENCY_PENALTY : 1);
-
-        for (const t of this.towers)
+        for (const t of region.towers)
         {
             //  Settle any recoil first, so a tower that browns out mid-kick
             //  still slides home instead of freezing off-centre.
@@ -1802,7 +2253,7 @@ export class Game extends Scene
             t.cooldown -= delta;
             if (t.cooldown > 0) continue;
 
-            const target = this.nearestEnemy(t.x, t.y, t.spec.range, t.spec.seesCloaked);
+            const target = this.nearestEnemy(region, t.x, t.y, t.spec.range, t.spec.seesCloaked);
             if (!target) continue;
 
             t.cooldown = t.spec.rate * penalty;
@@ -1810,7 +2261,7 @@ export class Game extends Scene
         }
 
         //  Homing bullets.
-        for (const b of this.bullets)
+        for (const b of region.bullets)
         {
             if (!b.target.alive)
             {
@@ -1839,8 +2290,8 @@ export class Game extends Scene
             if (b.facing) b.obj.rotation = angle;
         }
 
-        this.bullets = this.bullets.filter(b => b.obj.active);
-        this.enemies = this.enemies.filter(e => e.alive);
+        region.bullets = region.bullets.filter(b => b.obj.active);
+        region.enemies = region.enemies.filter(e => e.alive);
     }
 
     hit (enemy: Enemy, damage: number)
@@ -1848,6 +2299,8 @@ export class Game extends Scene
         if (!enemy.alive) return;
 
         enemy.hp -= damage;
+
+        const layer = enemy.region.layer;
 
         if (enemy.hp <= 0)
         {
@@ -1863,6 +2316,8 @@ export class Game extends Scene
 
             const radius = boss ? 26 : flying ? 12 : 6;
             const pop = this.add.circle(x, y, radius, flying ? VIOLET : ACCENT).setDepth(6);
+            layer.add(pop);
+
             this.tweens.add({
                 targets: pop, scale: 3, alpha: 0, duration: boss ? 500 : flying ? 340 : 220,
                 onComplete: () => pop.destroy()
@@ -1885,6 +2340,8 @@ export class Game extends Scene
         //  A spark per hit rather than a tint flash — at this fire rate a flash
         //  would leave the mob white for most of its short life.
         const spark = this.add.circle(enemy.obj.x, enemy.obj.y, 3, 0xffffff, 0.9).setDepth(7);
+        layer.add(spark);
+
         this.tweens.add({
             targets: spark, alpha: 0, scale: 0.4, duration: 110, onComplete: () => spark.destroy()
         });
@@ -1912,7 +2369,8 @@ export class Game extends Scene
 
         //  Four build buttons fill the right-hand 480px of the band, which is
         //  most of it — everything else is packed into three short rows on the
-        //  left and fitText()'d so nothing can grow into the buttons.
+        //  left and fitText()'d so nothing can grow into the buttons. The region
+        //  tabs sit in the strip above them; see makeTab().
         this.makePicker('iam', 591, '1');
         this.makePicker('shield', 711, '2');
         this.makePicker('waf', 831, '3');
@@ -1937,11 +2395,14 @@ export class Game extends Scene
 
     }
 
-    //  Bottom HUD line: flavour plus every key binding, rewritten on mute so
-    //  the audio state is visible while presenting.
+    //  Bottom HUD line: which hall you are looking at, then every key binding.
+    //  Rewritten on mute and on every region switch.
     showHint ()
     {
-        this.hintText.setText(this.sound.mute ? `${HINT}  ·  MUTED` : HINT);
+        const region = this.regions[this.active];
+        const hall = region ? `DATA HALL ${region.index + 1}  ·  ${region.name}  ·  ` : '';
+
+        this.hintText.setText(`${hall}${HINT}${this.sound.mute ? '  ·  MUTED' : ''}`);
         this.fitText(this.hintText, HINT_W);
     }
 
@@ -1965,6 +2426,7 @@ export class Game extends Scene
             ['+ $10,000', () => this.grant(10000)],
             ['UNLOCK ALL TOWERS', () => this.unlockAll()],
             ['SPAWN NEXT WAVE NOW', () => this.forceWave()],
+            ['PROVISION NEW REGION', () => this.provisionRegion()],
             ['REPAIR TO 100%', () => this.repair()],
             ['CLEAR THE BOARD', () => this.clearEnemies()]
         ];
@@ -2048,10 +2510,14 @@ export class Game extends Scene
         this.showIntegrity();
     }
 
+    //  Every hall, not just the one on screen.
     clearEnemies ()
     {
-        for (const e of [...this.enemies]) this.killEnemy(e, false);
-        this.enemies = [];
+        for (const region of this.regions)
+        {
+            for (const e of [...region.enemies]) this.killEnemy(e, false);
+            region.enemies = [];
+        }
     }
 
     //  One HUD build button. Clicking it, or pressing its number, buys the

@@ -121,7 +121,7 @@ public distribution, so worth a thought before this is hosted anywhere.
 | Key | File | Length | Peak | Plays during |
 |-----|------|--------|------|--------------|
 | `music-core` | `music-core.wav` | 8 bars / 20.00s | -14 dBFS | Normal play. Am-F-C-G, half-time kick, offbeat hats, sparse arp |
-| `music-boss` | `music-boss.wav` | 4 bars / 10.00s | -14 dBFS | Boss waves. Four-on-the-floor, 16th bass, timpani, Bb over the A root |
+| `music-boss` | `music-boss.wav` | 8 bars / 20.00s | -10 dBFS | Boss waves. Four-on-the-floor, 16th bass, timpani, Bb over the A root, building to a crash |
 
 Both are **A minor at 96 BPM**. That is a hard constraint, not a coincidence:
 the game crossfades between them mid-wave, and the tracks are not beat-aligned
@@ -130,18 +130,37 @@ listenable. If you retune one, retune the other.
 
 The core loop is deliberately unmemorable. It plays for an entire run, so
 anything with a real hook would be intolerable by wave 12; the job is to imply a
-machine room, not to be liked. The boss loop earns its contrast structurally
-(double-time drums, a semitone clash) rather than by getting louder.
+machine room, not to be liked.
+
+The boss loop is the opposite, and gets its contrast three ways. It is **4dB
+hotter** (-10 against the bed's -14, which is 5.3dB in RMS terms), so the
+crossfade is a step up in level and not only in arrangement. It is **denser**:
+four-on-the-floor against the bed's half-time, sixteenth bass against offbeat
+plucks, and a Bb a semitone above the A root. And it **builds**, across eight
+bars rather than the four it started with:
+
+    bars 1-4   the riff
+    bars 5-6   brass underneath, drone up an octave
+    bar  7     the Bb, now with a tritone in the stab
+    bar  8     accelerating timpani roll and a swell into the crash
+
+The length matters more than it looks. A leatherback crawls for nearly a minute,
+so the original 4-bar loop went round six times per boss and the repetition read
+as cheap rather than as tense. Per-bar intensity is a multiplier over one set of
+patterns (`PUSH` in `boss()`) rather than a second set, so the two halves cannot
+drift out of step with each other.
 
 Loops are made seamless by `fold()` in `dsp.mjs`: render the loop plus a tail,
 then add the overhang back over the start, so decays that run past the end are
 already ringing at the beginning. `declick()` must never be used on a loop, since
 a fade at either end is a hole at the seam.
 
-Verified after generation: both files are an exact whole number of bars
-(882000 and 441000 samples), and the RMS across the loop seam matches the RMS
-across every internal bar line to within about 1dB, so the loop point is not
-audible as an event.
+Verified after generation: both files are an exact whole number of bars (882000
+samples each), neither clips, and the RMS across the loop seam sits inside the
+range of every internal bar line, so the loop point is not audible as an event.
+That check matters more on the boss track than the bed, because the build means a
+loud bar 8 now butts straight up against a quiet bar 1 — the crash on the
+downbeat is there to cover that drop, and the measurement confirms it does.
 
 ### How the game switches
 

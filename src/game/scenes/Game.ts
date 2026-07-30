@@ -1873,11 +1873,11 @@ export class Game extends Scene
     {
         const tiers: { at: number, run: () => void }[] = [
             { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
-            { at: 80, run: () => this.killPowerDomain(0) },
+            { at: 80, run: () => this.killRandomAz() },
             { at: 70, run: () => { this.billing = 0.6; this.flashHud('BILLING THROTTLED  ·  BOUNTY -40%'); } },
             { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(7500); } },
             { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
-            { at: 40, run: () => { this.killPowerDomain(1); this.spikeMs = 4000; } },
+            { at: 40, run: () => { this.killRandomAz(); this.spikeMs = 4000; } },
             { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(5500); } },
             { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
             { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(3500); this.flashHud('ORIGIN FAILING'); } }
@@ -1900,6 +1900,27 @@ export class Game extends Scene
         this.tweens.add({
             targets: this.statusText, alpha: 0.2, duration: 160, yoyo: true, repeat: 3
         });
+    }
+
+    //  Origin damage takes a zone out, drawn from those still lit, so no two
+    //  runs degrade the same way. The integrity tiers decide when this fires,
+    //  which is what makes it "the more the origin is hit, the more goes dark".
+    killRandomAz ()
+    {
+        const lit: number[] = [];
+
+        for (let slot = 0; slot < PWR_NAMES.length; slot++)
+        {
+            if (!this.powerLost.includes(slot)) lit.push(slot);
+        }
+
+        if (lit.length === 0)
+        {
+            this.flashHud('EVERY ZONE IS ALREADY DARK');
+            return;
+        }
+
+        this.killPowerDomain(PhaserMath.RND.pick(lit));
     }
 
     //  A power domain fails. One grid feeds every hall, so it goes dark in all
@@ -2156,9 +2177,7 @@ export class Game extends Scene
             .setRotation(angle)
             .setDepth(7);
 
-        const flash = this.add.circle(tower.x, tower.y, 15, 0xffffff, 0.85).setDepth(8);
-
-        region.layer.add([glow, core, flash]);
+        region.layer.add([glow, core]);
 
         this.tweens.add({
             targets: core, scaleY: 0.08, alpha: 0, duration: 260, ease: 'Cubic.In',
@@ -2674,7 +2693,7 @@ export class Game extends Scene
             ['UNLOCK ALL TOWERS', () => this.unlockAll()],
             ['SPAWN NEXT WAVE NOW', () => this.forceWave()],
             ['PROVISION NEW REGION', () => this.provisionRegion()],
-            ['FAIL NEXT POWER DOMAIN', () => this.failNextPower()],
+            ['FAIL A RANDOM AZ', () => this.killRandomAz()],
             ['REPAIR TO 100%', () => this.repair()],
             ['CLEAR THE BOARD', () => this.clearEnemies()]
         ];
@@ -2758,20 +2777,6 @@ export class Game extends Scene
         this.showIntegrity();
     }
 
-    //  Trip the next power domain without grinding integrity down to reach it.
-    failNextPower ()
-    {
-        for (let slot = 0; slot < PWR_NAMES.length; slot++)
-        {
-            if (!this.powerLost.includes(slot))
-            {
-                this.killPowerDomain(slot);
-                return;
-            }
-        }
-
-        this.flashHud('EVERY POWER DOMAIN IS ALREADY DARK');
-    }
 
     //  Every hall, not just the one on screen.
     clearEnemies ()

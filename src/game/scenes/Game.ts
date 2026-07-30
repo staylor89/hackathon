@@ -59,6 +59,10 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     }
 };
 
+//  Selling a tower hands back half of what it cost.
+const SELL_RATE = 0.5;
+const refund = (spec: TowerSpec) => Math.floor(spec.cost * SELL_RATE);
+
 //  ── Enemies ──────────────────────────────────────────────────────────────
 //  DDoS: small, fragile, arrives in a flood. Individually harmless.
 const DDOS_SPEED = 115;       // px/sec along the trench
@@ -136,8 +140,11 @@ interface Tower {
     spec: TowerSpec;
     cooldown: number;
     offline: boolean;
+    sold: boolean;                      // stops queued brownouts touching it
     box: GameObjects.Rectangle;
     label: GameObjects.Text;
+    pad: GameObjects.Rectangle;         // slot underneath, re-armed on sell
+    ring: GameObjects.Arc;
 }
 
 interface Bullet {
@@ -494,13 +501,19 @@ export class Game extends Scene
             pad.setFillStyle(BG, 0).setStrokeStyle(1, spec.colour, 0.4);
             ring.setVisible(false);
 
-            this.buildTower(x, y, spec);
+            //  The pad stays around underneath, disabled, so selling can hand
+            //  the slot straight back.
+            this.buildTower(x, y, spec, pad, ring);
         });
     }
 
-    buildTower (x: number, y: number, spec: TowerSpec)
+    buildTower (x: number, y: number, spec: TowerSpec, pad: GameObjects.Rectangle, ring: GameObjects.Arc)
     {
-        const box = this.add.rectangle(x, y, 40, 40, 0x16243a).setStrokeStyle(2, spec.colour).setDepth(4);
+        const box = this.add.rectangle(x, y, 40, 40, 0x16243a)
+            .setStrokeStyle(2, spec.colour)
+            .setDepth(4)
+            .setInteractive({ useHandCursor: true });
+
         const label = this.add.text(x, y, spec.label, {
             fontFamily: 'Arial Black', fontSize: 11, color: spec.hex
         }).setOrigin(0.5).setDepth(4);
@@ -509,7 +522,65 @@ export class Game extends Scene
         label.setScale(0.4);
         this.tweens.add({ targets: [box, label], scale: 1, duration: 180, ease: 'Back.Out' });
 
-        this.towers.push({ x, y, spec, cooldown: 0, offline: false, box, label });
+        const tower: Tower = {
+            x, y, spec, cooldown: 0, offline: false, sold: false, box, label, pad, ring
+        };
+
+        //  Hovering a built tower shows its real range and what it sells for.
+        const tag = this.add.text(x, y - 32, `SELL +$${refund(spec)}`, {
+            fontFamily: 'Arial Black', fontSize: 11, color: '#22c55e',
+            backgroundColor: '#0b1120', padding: { x: 4, y: 2 }
+        }).setOrigin(0.5).setDepth(11).setVisible(false);
+
+        box.on('pointerover', () => {
+            ring.setRadius(spec.range);
+            ring.setFillStyle(spec.colour, 0.07).setStrokeStyle(1, spec.colour, 0.35);
+            ring.setVisible(true);
+            box.setStrokeStyle(2, GREEN);
+            tag.setVisible(true);
+        });
+
+        box.on('pointerout', () => {
+            ring.setVisible(false);
+            box.setStrokeStyle(2, tower.offline ? OFFLINE : spec.colour);
+            tag.setVisible(false);
+        });
+
+        box.on('pointerdown', () => {
+            if (this.over || tower.sold) return;
+            tag.destroy();
+            this.sellTower(tower);
+        });
+
+        this.towers.push(tower);
+    }
+
+    //  Refund half the build cost and re-arm the pad underneath.
+    sellTower (tower: Tower)
+    {
+        tower.sold = true;
+        this.towers = this.towers.filter(t => t !== tower);
+
+        this.budget += refund(tower.spec);
+        this.budgetText.setText(`$${this.budget}`);
+
+        //  Any bullet already in flight keeps going — it's paid for.
+        const { x, y } = tower;
+        tower.ring.setVisible(false);
+        tower.box.destroy();
+        tower.label.destroy();
+
+        tower.pad.setInteractive({ useHandCursor: true });
+        tower.pad.setFillStyle(BG, 0).setStrokeStyle(1, PAD_LINE, 0.9);
+
+        const refundText = this.add.text(x, y - 24, `+$${refund(tower.spec)}`, {
+            fontFamily: 'Arial Black', fontSize: 13, color: '#22c55e'
+        }).setOrigin(0.5).setDepth(11);
+
+        this.tweens.add({
+            targets: refundText, y: y - 56, alpha: 0, duration: 700,
+            onComplete: () => refundText.destroy()
+        });
     }
 
     //  Change which tower the next click builds.
@@ -837,6 +908,9 @@ export class Game extends Scene
                 t.label.setColor('#475569');
 
                 this.time.delayedCall(BROWNOUT_MS, () => {
+                    //  It may have been sold out from under us mid-brownout.
+                    if (t.sold) return;
+
                     t.offline = false;
                     t.box.setStrokeStyle(2, t.spec.colour);
                     t.label.setColor(t.spec.hex);
@@ -1083,7 +1157,7 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 14, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.add.text(512, 52, 'pick a tower, click a slot to build  ·  ESC menu', {
+        this.add.text(512, 52, 'click a slot to build  ·  click a tower to sell  ·  ESC menu', {
             fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
         }).setOrigin(0.5, 0).setDepth(10);
 

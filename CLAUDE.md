@@ -1,6 +1,6 @@
-# Chrisolutions — Hackathon Guide for Claude
+# EU-Tort-3 — Hackathon Guide for Claude
 
-This repo is a 2-hour hackathon kit. Teammates (mostly Python/backend engineers) clone a fork and build a game starring **Chris**, our PM. The stack — **Phaser 4 + TypeScript + Vite** — was chosen on purpose; nobody is expected to know it going in or coming out. The point is to see how far we can get collaborating with you, Claude, without the usual backend constraints.
+This repo is a hackathon kit. Teammates (mostly Python/backend engineers) clone a fork and build **EU-Tort-3**: a tower defence game set in "Europe (Tortoise)", an AWS region that isn't on the status page. AWS services are towers, tortoise-themed intruders are infrastructure attacks, the origin server at the end of the path is the base. The stack — **Phaser 4 + TypeScript + Vite** — was chosen on purpose; nobody is expected to know it going in or coming out. The point is to see how far we can get collaborating with you, Claude, without the usual backend constraints.
 
 ## Run it
 
@@ -23,13 +23,12 @@ After editing any `.ts` file under `src/`, you MUST run `npm run typecheck` befo
 | `src/game/main.ts` | Game config, scene registration, canvas size |
 | `src/game/scenes/Boot.ts` | First scene — minimal loader for the Preloader's assets |
 | `src/game/scenes/Preloader.ts` | Loads game assets via `this.load.*` |
-| `src/game/scenes/MainMenu.ts` | Title screen |
-| `src/game/scenes/Game.ts` | Main gameplay scene — most edits land here |
+| `src/game/scenes/MainMenu.ts` | Start page — title + START button |
+| `src/game/scenes/Game.ts` | Main gameplay scene — most edits land here (currently a stub) |
 | `src/game/scenes/GameOver.ts` | End screen |
-| `public/chris/normal-chris.png` | The star |
-| `public/chris/super-chris.png` | Powered-up Chris |
-| `public/chris/french-chris.png` | French Chris (use responsibly) |
-| `public/assets/bg.png`, `logo.png` | Other static assets |
+| `public/assets/bg.png`, `logo.png` | Static assets |
+
+There is no character art in the repo. Placeholder textures are generated at runtime with `Graphics.generateTexture` in `Preloader.create()`.
 
 ## Loading assets
 
@@ -37,20 +36,19 @@ Anything under `public/` is served at the URL root. Load via Phaser:
 
 ```ts
 // Inside Preloader.preload()
-this.load.image('chris', 'chris/normal-chris.png');
-this.load.image('chris-super', 'chris/super-chris.png');
 this.load.image('bg', 'assets/bg.png');
+this.load.image('tortoise', 'assets/tortoise.png');
 ```
 
 Then in a scene's `create()`:
 
 ```ts
-this.add.image(512, 384, 'chris');
+this.add.image(512, 384, 'tortoise');
 ```
 
 ## Phaser 4 knowledge
 
-26 skill packs live in `.claude/skills/` covering scenes, sprites, physics (arcade + matter), input, tweens, particles, tilemaps, audio, cameras, text, filters, tilemaps, and more. They load automatically when relevant — teammates don't need to read Phaser docs; they describe what they want ("make Chris jump on spacebar", "spawn enemies from the right edge", "add a particle trail") and you pull the right skill.
+26 skill packs live in `.claude/skills/` covering scenes, sprites, physics (arcade + matter), input, tweens, particles, tilemaps, audio, cameras, text, filters, tilemaps, and more. They load automatically when relevant — teammates don't need to read Phaser docs; they describe what they want ("make the tower fire on cooldown", "spawn enemies from the right edge", "add a particle trail") and you pull the right skill.
 
 ## Slash commands
 
@@ -58,7 +56,7 @@ this.add.image(512, 384, 'chris');
 
 ## House rules
 
-- Edit existing scenes; resist creating new abstractions for a 2hr jam.
+- Edit existing scenes; resist creating new abstractions unless they earn their keep.
 - Keep TypeScript happy but don't fight it — `any` is fine if it unblocks. `noUnusedLocals` and `noUnusedParameters` are intentionally off; `strict` is on.
 - Default canvas is 1024×768 (`src/game/main.ts`). Change it there if needed.
 - Don't spend time on a build pipeline, tests, or CI. `npm run dev` is the deploy target.

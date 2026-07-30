@@ -1,6 +1,6 @@
-# Chrisolutions — Hackathon Game Jam
+# EU-Tort-3 — Hackathon Game Jam
 
-A 2-hour game jam where small groups build a game starring **Chris**, our PM, using a stack that was deliberately chosen *for* you: **Phaser 4 + TypeScript + Vite**.
+A 2-hour game jam where small groups build a game using a stack that was deliberately chosen *for* you: **Phaser 4 + TypeScript + Vite**.
 
 You are not expected to know Phaser. You are not expected to know Node. You are not expected to walk away knowing them either. The point is to experiment with what's possible when you collaborate with **Claude** without your usual constraints — no backend, no pipelines, no Jira — and see how far you can push it in two hours.
 
@@ -20,15 +20,13 @@ At T+2hr we demo by screen-share. Show whatever you built.
 5. Build. Push to your fork.
 6. At T+2hr — screen-share demo.
 
-## The star
+## The game
 
-Three Chris sprites live in `public/chris/`:
+**EU-Tort-3** — "Europe (Tortoise)", an AWS region that isn't on the status page. Tower defence: AWS services are the towers, tortoise-themed intruders are the infrastructure attacks, and the origin server at the end of the path is what you're defending.
 
-- `normal-chris.png`
-- `super-chris.png`
-- `french-chris.png`
+There is no art in the repo yet. Placeholder shapes are generated at runtime in `Preloader.create()` (see `sparkle`), so nothing blocks on assets. Drop real files into `public/assets/` and load them in `Preloader.preload()` when they exist.
 
-Use them however you want. Platformer, shooter, rhythm game, idle clicker, dating sim, kart racer — your call.
+Starting scenes: a start page (`MainMenu`), a stub gameplay scene (`Game`), and an end screen (`GameOver`).
 
 ## Groups
 

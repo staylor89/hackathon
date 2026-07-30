@@ -1,6 +1,6 @@
 {
-  "name": "chrisolutions",
-  "description": "Chrisolutions hackathon kit — Phaser 4 + TypeScript + Vite, Claude-Code ready.",
+  "name": "eu-tort-3",
+  "description": "EU-Tort-3 — Phaser 4 + TypeScript + Vite hackathon game.",
   "version": "1.4.0",
   "repository": {
     "type": "git",

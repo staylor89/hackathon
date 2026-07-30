@@ -9,11 +9,15 @@ export class Preloader extends Scene
 
     init ()
     {
-        this.add.image(512, 384, 'background');
+        this.add.rectangle(512, 384, 1024, 768, 0x0b1120);
 
-        this.add.rectangle(512, 384, 468, 32).setStrokeStyle(1, 0xffffff);
+        this.add.text(512, 330, 'EU-TORT-3', {
+            fontFamily: 'Arial Black', fontSize: 40, color: '#e6edf3'
+        }).setOrigin(0.5);
 
-        const bar = this.add.rectangle(512 - 230, 384, 4, 28, 0xffffff);
+        this.add.rectangle(512, 400, 468, 24).setStrokeStyle(1, 0xff9900);
+
+        const bar = this.add.rectangle(512 - 230, 400, 4, 20, 0xff9900);
 
         this.load.on('progress', (progress: number) => {
             bar.width = 4 + (460 * progress);
@@ -22,15 +26,14 @@ export class Preloader extends Scene
 
     preload ()
     {
-        this.load.image('chris', 'chris/normal-chris.png');
-        this.load.image('chris-super', 'chris/super-chris.png');
-        this.load.image('chris-french', 'chris/french-chris.png');
-        this.load.image('chris-after-hours', 'chris/after-hours-chris.png');
+        //  No image assets yet — game art is generated in create() below.
+        //  Add real files here as they arrive, e.g.:
+        //  this.load.image('tortoise', 'assets/tortoise.png');
     }
 
     create ()
     {
-        // Generate a small white circle texture for particle emitters.
+        //  Generate a small white circle texture for particle emitters.
         const g = this.make.graphics({ x: 0, y: 0 }, false);
         g.fillStyle(0xffffff, 1);
         g.fillCircle(4, 4, 4);

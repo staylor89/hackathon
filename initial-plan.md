@@ -1,10 +1,10 @@
-# Chris's Cloud Defence — Write hackathon plan docs into the repo
+# EU-Tort-3 — Write hackathon plan docs into the repo
 
 ## Context
 
-Hackathon project shared between 3 team members, starting from `/Users/mattlaw/code/hackathon/hackathon` — the "Chrisolutions" jam kit: a working Phaser 4.0 + TypeScript 5.7 + Vite 6.3 game (fork of `phaserjs/template-vite-ts`) with scenes `Boot → Preloader → MainMenu → Game → GameOver`, 26 Phaser skill packs in `.claude/skills/`, and a jam brief that games should star **Chris the PM**.
+Hackathon project shared between 3 team members, starting from `/Users/mattlaw/code/hackathon/hackathon` — the jam kit: a working Phaser 4.0 + TypeScript 5.7 + Vite 6.3 game (fork of `phaserjs/template-vite-ts`) with scenes `Boot → Preloader → MainMenu → Game → GameOver` and 26 Phaser skill packs in `.claude/skills/`.
 
-Concept (agreed with user): tower defence where **AWS services are towers** and **tortoise-themed intruders are infrastructure attacks**. MVP = one tower (**AWS Shield**) vs one attack (**DDoS tortoise swarm**), data-driven so more pairs are trivial. Chris is the origin server / base at the end of the path. Work splits **by subsystem** into 3 parallel streams for a **5-hour** jam. Stretch: multi-region = multiple maps.
+Concept (agreed with user): **EU-Tort-3** — "Europe (Tortoise)", an AWS region that isn't on the status page. Tower defence where **AWS services are towers** and **tortoise-themed intruders are infrastructure attacks**. MVP = one tower (**AWS Shield**) vs one attack (**DDoS tortoise swarm**), data-driven so more pairs are trivial. The **origin server** is the base at the end of the path. Work splits **by subsystem** into 3 parallel streams for a **5-hour** jam. Stretch: multi-region = multiple maps.
 
 **User's instruction:** write all the plans into the repo, as detailed as possible, so they can be shared with the other 2 team members. So the deliverable of this task is **planning documentation committed to the repo** — no game code yet.
 
@@ -12,7 +12,7 @@ Concept (agreed with user): tower defence where **AWS services are towers** and 
 
 Create `docs/plan/` in `/Users/mattlaw/code/hackathon/hackathon/`:
 
-1. **`docs/plan/00-overview.md`** — game concept + theming (Chris = origin server), MVP scope, the 3-stream split at a glance, design-decision table with rationale (manual waypoint steering over `Curves.Path`; distance² targeting over arcade overlap; homing point-mover projectiles with guaranteed hit; `generateTexture` placeholder art first; hand-placed `GridSlot[]` over tilemaps; HUD as a parallel scene; module-singleton event bus), hour-by-hour timeline with the two integration checkpoints (T+2:00, T+3:30) and T+4:30 freeze, git workflow (trunk-based on the fork, pull-rebase before push, typecheck before every push, fork + `git remote set-url` as step zero), risk list with fallbacks, stretch-goal note.
+1. **`docs/plan/00-overview.md`** — game concept + theming (origin server = base), MVP scope, the 3-stream split at a glance, design-decision table with rationale (manual waypoint steering over `Curves.Path`; distance² targeting over arcade overlap; homing point-mover projectiles with guaranteed hit; `generateTexture` placeholder art first; hand-placed `GridSlot[]` over tilemaps; HUD as a parallel scene; module-singleton event bus), hour-by-hour timeline with the two integration checkpoints (T+2:00, T+3:30) and T+4:30 freeze, git workflow (trunk-based on the fork, pull-rebase before push, typecheck before every push, fork + `git remote set-url` as step zero), risk list with fallbacks, stretch-goal note.
 
 2. **`docs/plan/01-contracts.md`** — the frozen shared contracts, verbatim TypeScript ready to paste at T+0:20:
    - `src/game/td/types.ts`: `TowerType`/`EnemyType`, `TowerConfig`, `EnemyConfig`, `WaveEntry`/`WaveConfig`, `Point`/`GridSlot`/`MapDef`, cross-stream entity views `IEnemy`/`ITower`, factory signatures `SpawnEnemyFn`/`CreateTowerFn`.
@@ -26,7 +26,7 @@ Create `docs/plan/` in `/Users/mattlaw/code/hackathon/hackathon/`:
 
 4. **`docs/plan/03-stream-entities.md`** (Dev B) — `td/entities/Enemy.ts` (Sprite subclass, manual waypoint stepping in `preUpdate`, `pathProgress`, `takeDamage`/die/leak + events), `td/entities/Tower.ts` (cooldown, distance² targeting, target = max `pathProgress` in range), `td/entities/Projectile.ts` (homing dot, hit within 12px, self-destroy if target dies), `td/configs/towers.ts` + `td/configs/enemies.ts` registries; keypress test-spawn stub; sprint-2 polish (death flash, sparkle particle burst, leak feedback); skill packs.
 
-5. **`docs/plan/04-stream-ui.md`** (Dev C) — new `scenes/HUD.ts` parallel scene (launched from Game; camera fixed so HUD coords == world coords), `td/ui/Placement.ts` (shop button, ghost highlight over slots, `ui-place-tower` emit, rejection toast, unaffordable greying), MainMenu/GameOver retheming (win = super-chris, loss = after-hours-chris), `Preloader.ts` ownership (placeholder `generateTexture` → real art swaps keep the same keys), sound in the polish phase; placement-UX fallback (drop ghost, click-slot-buys); skill packs.
+5. **`docs/plan/04-stream-ui.md`** (Dev C) — new `scenes/HUD.ts` parallel scene (launched from Game; camera fixed so HUD coords == world coords), `td/ui/Placement.ts` (shop button, ghost highlight over slots, `ui-place-tower` emit, rejection toast, unaffordable greying), MainMenu/GameOver retheming (win = region healthy, loss = "REGION DOWN"), `Preloader.ts` ownership (placeholder `generateTexture` → real art swaps keep the same keys), sound in the polish phase; placement-UX fallback (drop ghost, click-slot-buys); skill packs.
 
 6. **Edit `README.md`** (repo root) — add a short "Our team's plan" section near the top linking to `docs/plan/`, with the game name and one-paragraph pitch. Keep the existing kit content intact.
 

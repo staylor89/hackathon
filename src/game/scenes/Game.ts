@@ -178,7 +178,7 @@ const NINJA_HP = 26;
 const NINJA_HP_GROWTH = 8;    // per wave after the first
 const NINJA_DAMAGE = 4;
 const NINJA_SCALE = 0.72;     // README asks for ~48px on screen
-const NINJA_BOUNTY_MULT = 2;
+const NINJA_BOUNTY = 10;      // $ per kill — the baseline mob
 const NINJA_CLOAK_EVERY = 2400;   // ms between dashes
 const NINJA_CLOAK_MS = 700;       // how long each dash lasts
 const NINJA_DASH_MULT = 2.4;      // path speed multiplier while dashing
@@ -194,7 +194,7 @@ const DDOS_HP = 12;
 const DDOS_HP_GROWTH = 4;     // per wave after the first
 const DDOS_DAMAGE = 3;        // integrity lost if it reaches the origin
 const DDOS_SCALE = 0.34;      // tortoise-ddos.png is 64x64 → ~22px on screen
-const DDOS_BOUNTY = 8;
+const DDOS_BOUNTY = 15;      // $ per kill
 
 //  SQL injection: airborne, so it ignores the cable trench entirely and
 //  wanders straight at the origin. Fragile but urgent, and expensive if it
@@ -210,7 +210,7 @@ const INJECT_HP = 45;
 const INJECT_HP_GROWTH = 8;   // per wave after the first
 const INJECT_DAMAGE = 9;
 const INJECT_SCALE = 0.52;
-const INJECT_BOUNTY_MULT = 4; // paid as bounty x this
+const INJECT_BOUNTY = 30;     // $ per kill
 const INJECT_SPREAD = 78;     // degrees of random heading either side of "toward origin"
 const INJECT_TURN_MIN = 220;  // ms before it picks a new heading
 const INJECT_TURN_MAX = 640;
@@ -227,7 +227,7 @@ const TANK_HP = 420;
 const TANK_HP_GROWTH = 165;   // per wave after the first
 const TANK_DAMAGE = 25;       // integrity lost if it reaches the origin
 const TANK_SCALE = 0.84;      // 96x96 art → ~80px on screen, per the README
-const TANK_BOUNTY_MULT = 12;
+const TANK_BOUNTY = 75;       // $ per kill
 const TANK_SPACING = 3200;    // ms between tanks once there is more than one
 
 const DDOS_FIRST_WAVE = 2;    // the flood joins in wave 2
@@ -272,18 +272,9 @@ const TAB_W = 84;
 const TAB_H = 16;
 const TAB_GAP = 4;
 
-//  A power domain is a 4x3 block of tiles that goes dark as integrity drops.
-const PWR_W = 4;
-const PWR_H = 3;
-const PWR_NAMES = ['PWR-A', 'PWR-B'];
-
-interface RackDecor {
-    col: number;
-    row: number;
-    w: number;                // px, not tiles — racks are 48px deep in a 64px row
-    h: number;
-    label: string;
-}
+//  One feed per availability zone. Only the first two are tripped by the
+//  integrity tiers, so a hall always keeps one zone on mains power.
+const PWR_NAMES = ['PWR-A', 'PWR-B', 'PWR-C'];
 
 //  Everything that makes one hall's floor plan. Halls differ only in here, so
 //  a new layout is a data change and never a code change.
@@ -295,12 +286,6 @@ interface Layout {
     waypoints: [number, number][];
     originRow: number;
     ingressRow: number;
-    //  Cells taken up by decorative hardware — never buildable. The origin
-    //  rack's own cells are derived from originRow, not listed here.
-    rackCells: [number, number][];
-    decor: RackDecor[];
-    //  Top-left corner of each power domain, in the order they fail.
-    power: [number, number][];
 }
 
 const HALL_A: Layout = {
@@ -308,16 +293,7 @@ const HALL_A: Layout = {
         [-1, 1], [4, 1], [4, 4], [1, 4], [1, 8], [6, 8], [6, 3], [10, 3], [10, 7], [13, 7]
     ],
     originRow: 7,
-    ingressRow: 1,
-    rackCells: [
-        [12, 0], [13, 0], [14, 0], [15, 0],
-        [8, 10], [9, 10], [10, 10], [11, 10], [12, 10]
-    ],
-    decor: [
-        { col: 12, row: 0, w: 248, h: 48, label: 'RACK A1-A4' },
-        { col: 8, row: 10, w: 312, h: 48, label: 'RACK B1-B5' }
-    ],
-    power: [[12, 0], [0, 8]]
+    ingressRow: 1
 };
 
 //  Second floor plan. Same 16x11 grid, a route of comparable length (38 tiles
@@ -328,16 +304,7 @@ const HALL_C: Layout = {
         [-1, 4], [2, 4], [2, 1], [5, 1], [5, 6], [2, 6], [2, 9], [8, 9], [8, 4], [11, 4], [11, 2], [13, 2]
     ],
     originRow: 2,
-    ingressRow: 4,
-    rackCells: [
-        [9, 10], [10, 10], [11, 10], [12, 10], [13, 10],
-        [0, 0], [1, 0]
-    ],
-    decor: [
-        { col: 9, row: 10, w: 312, h: 48, label: 'RACK C1-C5' },
-        { col: 0, row: 0, w: 120, h: 48, label: 'RACK C6-C7' }
-    ],
-    power: [[0, 7], [12, 4]]
+    ingressRow: 4
 };
 
 //  Mirror a hall top to bottom. Path length, tile count and the number of pads
@@ -346,10 +313,7 @@ const HALL_C: Layout = {
 const flipRows = (l: Layout): Layout => ({
     waypoints: l.waypoints.map(([c, r]) => [c, ROWS - 1 - r] as [number, number]),
     originRow: ROWS - 1 - l.originRow,
-    ingressRow: ROWS - 1 - l.ingressRow,
-    rackCells: l.rackCells.map(([c, r]) => [c, ROWS - 1 - r] as [number, number]),
-    decor: l.decor.map(d => ({ ...d, row: ROWS - 1 - d.row })),
-    power: l.power.map(([c, r]) => [c, ROWS - PWR_H - r] as [number, number])
+    ingressRow: ROWS - 1 - l.ingressRow
 });
 
 //  Hall n uses LAYOUTS[n]. Two plans and their mirrors, so the first four halls
@@ -384,6 +348,21 @@ const BROWNOUT_EVERY = 4000;  // ms between brownouts once they start
 const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
 const OFFLINE = 0x475569;
 
+//  Every hall is divided into three availability zones: full-height bands of
+//  columns, drawn on the board so the player can see them before building. An
+//  AZ is the smallest thing AWS gives its own power and cooling, so a power
+//  domain failing takes its whole zone's towers with it rather than one tower.
+//
+//  Inclusive column ranges, and they must tile 0..COLS-1 with no gap and no
+//  overlap: every build slot has to land in exactly one zone.
+const AZ_BANDS: [number, number][] = [[0, 5], [6, 10], [11, 15]];
+const AZ_SLOW = 1.8;          // cooldown multiplier for towers in a dark zone
+const AZ_DARK = 0xd08a8a;     // tint for a tower that still fires, just slower
+const AZ_LINE = 0x2f4a63;     // zone box, healthy
+const AZ_LINE_DARK = 0xef4444;
+const AZ_TAG = '#e6edf3';     // zone label, healthy
+const AZ_TAG_DARK = '#ff6b6b';
+
 //  Second HUD line. The hall you are looking at is prepended, and the line is
 //  rewritten on mute and on every region switch.
 const HINT = 'CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  1-4 / TAB REGION  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
@@ -406,7 +385,7 @@ interface Enemy {
     hp: number;
     maxHp: number;
     damage: number;                        // integrity cost of a breach
-    bountyMult: number;
+    bounty: number;                        // dollars paid when killed
     barBg: GameObjects.Rectangle;
     bar: GameObjects.Rectangle;
     barW: number;
@@ -421,8 +400,21 @@ interface Enemy {
     alive: boolean;
 }
 
+//  One of the three power feeds in a hall, covering a band of columns. Which
+//  zone a slot sits in is a property of the board, fixed when the hall is
+//  drawn: it does not depend on what the player builds, or when.
+interface Az {
+    name: string;
+    from: number;                       // first column, inclusive
+    to: number;                         // last column, inclusive
+    dark: boolean;                      // its power domain has failed
+    box: GameObjects.Rectangle;         // outline drawn on the board
+    label: GameObjects.Text;
+}
+
 interface Tower {
     region: Region;
+    az: Az;
     x: number;
     y: number;
     spec: TowerSpec;
@@ -452,6 +444,7 @@ interface Region {
     layer: GameObjects.Layer;
     route: Phaser.Curves.Path;
     towers: Tower[];
+    azs: Az[];
     enemies: Enemy[];
     bullets: Bullet[];
     pads: GameObjects.Rectangle[];
@@ -474,7 +467,7 @@ export class Game extends Scene
     over = false;
 
     //  Degradation state — all of this worsens as the origin takes damage.
-    bounty = DDOS_BOUNTY;
+    billing = 1;              // multiplier on every payout, cut by a tier
     fireRateMult = 1;         // >1 means slower shots
     waveGap = WAVE_GAP;
     spikeMs = SPIKE_MS;
@@ -672,7 +665,7 @@ export class Game extends Scene
         this.regions = [];
         this.active = 0;
         this.provisionAt = 0;
-        this.bounty = DDOS_BOUNTY;
+        this.billing = 1;
         this.fireRateMult = 1;
         this.waveGap = WAVE_GAP;
         this.spikeMs = SPIKE_MS;
@@ -761,24 +754,30 @@ export class Game extends Scene
         const route = this.drawRoute(layer, layout);
         this.drawIngress(layer, layout);
         const integrityBar = this.drawOrigin(layer, layout);
-        this.drawDecor(layer, layout);
 
         const region: Region = {
             index,
             name: REGION_NAMES[index % REGION_NAMES.length],
             layout, layer, route, integrityBar,
-            towers: [], enemies: [], bullets: [], pads: [],
+            towers: [], azs: [], enemies: [], bullets: [], pads: [],
             alertUntil: 0,
             tab: null as unknown as Region['tab']
         };
 
         this.regions.push(region);
+
+        //  Zones before pads: both sit at depth 0, so the boxes have to go into
+        //  the layer first to end up underneath the slots they contain.
+        this.drawAzs(region);
         this.drawPads(region);
         this.makeTab(region);
 
         //  A hall provisioned at 40% integrity opens already degraded: the
         //  damage is to the shared origin, not to the room it arrived in.
-        for (const slot of this.powerLost) this.shroudPower(region, slot);
+        for (const slot of this.powerLost)
+        {
+            this.darkenAz(region, this.azForDomain(region, slot));
+        }
 
         return region;
     }
@@ -1061,104 +1060,69 @@ export class Game extends Scene
         return bar;
     }
 
-    //  Cold-aisle racks and cooling plant. Pure decoration.
-    drawDecor (layer: GameObjects.Layer, layout: Layout)
-    {
-        const g = this.add.graphics();
-        layer.add(g);
-
-        const leds: GameObjects.Rectangle[] = [];
-
-        for (const spec of layout.decor)
-        {
-            const x = spec.col * TILE + 4;
-            const y = FLOOR_Y + spec.row * TILE + 8;
-
-            g.fillStyle(RACK, 1);
-            g.fillRect(x, y, spec.w, spec.h);
-            g.lineStyle(1, RACK_LIP, 1);
-            g.strokeRect(x, y, spec.w, spec.h);
-
-            for (let uy = y + 8; uy < y + spec.h - 6; uy += 12)
-            {
-                g.lineStyle(1, RACK_LIP, 0.6);
-                g.lineBetween(x + 6, uy, x + spec.w - 6, uy);
-                leds.push(this.add.rectangle(x + spec.w - 12, uy, 4, 4, (uy % 24 === 0) ? CYAN : GREEN));
-            }
-
-            //  Row 0 has nothing above it to label into, so that one sits just
-            //  inside the tile instead.
-            const labelY = spec.row === 0 ? FLOOR_Y + 2 : FLOOR_Y + spec.row * TILE - 12;
-
-            layer.add(this.add.text(spec.col * TILE + 6, labelY, spec.label, {
-                fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
-            }));
-        }
-
-        layer.add(leds);
-
-        this.tweens.add({
-            targets: leds,
-            alpha: 0.15,
-            duration: 900,
-            yoyo: true,
-            repeat: -1,
-            delay: this.tweens.stagger(90),
-            ease: 'Sine.InOut'
-        });
-    }
-
-    //  Buildable slots = free tiles that touch the cable trench.
+    //  Every tile in the hall is a buildable slot — no reserved cells, no
+    //  trench-adjacency rule. 176 pads a hall, so this is also the largest
+    //  single source of interactive objects on the board.
     drawPads (region: Region)
     {
-        const layout = region.layout;
-        const occupied = new Set<string>();
-        const onPath = new Set<string>();
-
-        //  Walk each straight segment and mark every cell it crosses.
-        for (let i = 0; i < layout.waypoints.length - 1; i++)
-        {
-            const [c1, r1] = layout.waypoints[i];
-            const [c2, r2] = layout.waypoints[i + 1];
-            const steps = Math.max(Math.abs(c2 - c1), Math.abs(r2 - r1));
-            const dc = Math.sign(c2 - c1);
-            const dr = Math.sign(r2 - r1);
-
-            for (let s = 0; s <= steps; s++)
-            {
-                const key = `${c1 + dc * s},${r1 + dr * s}`;
-                onPath.add(key);
-                occupied.add(key);
-            }
-        }
-
-        for (const [c, r] of layout.rackCells) occupied.add(`${c},${r}`);
-
-        //  The origin rack itself, derived from the row it sits on so a mirrored
-        //  layout can't forget to move it.
-        for (let r = layout.originRow - 1; r <= layout.originRow + 1; r++)
-        {
-            occupied.add(`14,${r}`);
-            occupied.add(`15,${r}`);
-        }
-
         for (let col = 0; col < COLS; col++)
         {
             for (let row = 0; row < ROWS; row++)
             {
-                if (occupied.has(`${col},${row}`)) continue;
-
-                const touchesPath = onPath.has(`${col - 1},${row}`) || onPath.has(`${col + 1},${row}`)
-                    || onPath.has(`${col},${row - 1}`) || onPath.has(`${col},${row + 1}`);
-
-                if (touchesPath) this.makePad(region, col, row);
+                this.makePad(region, col, row, this.azAt(region, col));
             }
         }
     }
 
+    //  The three zone boxes. Drawn as outlines with no fill so the floor, the
+    //  trench and the pads all still read through them.
+    drawAzs (region: Region)
+    {
+        AZ_BANDS.forEach(([from, to], i) => {
+            const x = from * TILE;
+            const w = (to - from + 1) * TILE;
+            const h = ROWS * TILE;
+
+            const box = this.add.rectangle(x, FLOOR_Y, w, h)
+                .setOrigin(0, 0)
+                .setStrokeStyle(2, AZ_LINE, 0.85);
+
+            const label = this.add.text(x + 6, FLOOR_Y + 4, `AZ-${String.fromCharCode(65 + i)}`, {
+                fontFamily: 'Arial Black', fontSize: 11, color: AZ_TAG,
+                backgroundColor: 'rgba(11, 17, 32, 0.88)', padding: { x: 4, y: 1 }
+            });
+
+            region.layer.add([box, label]);
+
+            region.azs.push({
+                name: `AZ-${String.fromCharCode(65 + i)}`,
+                from, to, dark: false, box, label
+            });
+        });
+    }
+
+    //  Which zone owns a column. AZ_BANDS tiles the whole grid, so the fallback
+    //  only fires if that invariant is ever broken.
+    azAt (region: Region, col: number): Az
+    {
+        for (const az of region.azs)
+        {
+            if (col >= az.from && col <= az.to) return az;
+        }
+
+        return region.azs[region.azs.length - 1];
+    }
+
+    //  One feed per zone, in order: PWR_NAMES[n] powers region.azs[n]. The two
+    //  lists are the same length by construction, so a slot always resolves.
+    azForDomain (region: Region, slot: number): Az
+    {
+        return region.azs[slot];
+    }
+
     //  One buildable slot: hover tints it in the armed tower's colour, click
     //  builds it.
-    makePad (region: Region, col: number, row: number)
+    makePad (region: Region, col: number, row: number, az: Az)
     {
         const x = this.cx(col);
         const y = this.cy(row);
@@ -1170,6 +1134,9 @@ export class Game extends Scene
         //  showRegion() re-arms every free pad in the hall it switches to, and
         //  this is how it knows which ones are free.
         pad.setData('free', true);
+
+        //  The slot owns its zone; whatever gets built here inherits it.
+        pad.setData('az', az);
 
         region.layer.add(pad);
         region.pads.push(pad);
@@ -1226,8 +1193,13 @@ export class Game extends Scene
 
         this.sfx('sfx-tower-build');
 
+        //  The slot decides the zone, so the same pad always yields the same
+        //  feed no matter what is built on it or in what order.
+        const az = pad.getData('az') as Az;
+
         const tower: Tower = {
-            region, x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad
+            region, az, x, y, spec, cooldown: 0, offline: false, sold: false,
+            sprite, pad
         };
 
         //  Hovering a built tower shows what it sells for.
@@ -1257,15 +1229,19 @@ export class Game extends Scene
         });
 
         region.towers.push(tower);
+        this.paintTower(tower);
     }
 
-    //  Restore a tower's resting look: dark while browned out, plain otherwise.
+    //  Restore a tower's resting look. Three states, most severe first: browned
+    //  out entirely, powered by a dark zone, or healthy.
     paintTower (tower: Tower)
     {
         if (tower.sold) return;
 
         if (tower.offline) tower.sprite.setTint(OFFLINE);
+        else if (tower.az.dark) tower.sprite.setTint(AZ_DARK);
         else tower.sprite.clearTint();
+
     }
 
     //  Refund half the build cost and re-arm the pad underneath.
@@ -1612,7 +1588,7 @@ export class Game extends Scene
         const enemy = this.addEnemy(region, {
             region,
             obj, follower: obj, flying: false, boss: false,
-            hp: maxHp, maxHp, damage: NINJA_DAMAGE, bountyMult: NINJA_BOUNTY_MULT,
+            hp: maxHp, maxHp, damage: NINJA_DAMAGE, bounty: NINJA_BOUNTY,
             barBg, bar, barW: 28, barOffset: 30,
             vx: 0, vy: 0, turnAt: 0,
             cloaked: false,
@@ -1648,7 +1624,7 @@ export class Game extends Scene
         const enemy = this.addEnemy(region, {
             region,
             obj, follower: obj, flying: false, boss: true,
-            hp: maxHp, maxHp, damage: TANK_DAMAGE, bountyMult: TANK_BOUNTY_MULT,
+            hp: maxHp, maxHp, damage: TANK_DAMAGE, bounty: TANK_BOUNTY,
             barBg, bar, barW: 54, barOffset: 48,
             vx: 0, vy: 0, turnAt: 0,
             cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
@@ -1744,7 +1720,7 @@ export class Game extends Scene
         const enemy = this.addEnemy(region, {
             region,
             obj, follower: obj, flying: false, boss: false,
-            hp: maxHp, maxHp, damage: DDOS_DAMAGE, bountyMult: 1,
+            hp: maxHp, maxHp, damage: DDOS_DAMAGE, bounty: DDOS_BOUNTY,
             barBg, bar, barW: 18, barOffset: 18,
             vx: 0, vy: 0, turnAt: 0,
             cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
@@ -1791,7 +1767,7 @@ export class Game extends Scene
         this.addEnemy(region, {
             region,
             obj, flying: true, boss: false,
-            hp: maxHp, maxHp, damage: INJECT_DAMAGE, bountyMult: INJECT_BOUNTY_MULT,
+            hp: maxHp, maxHp, damage: INJECT_DAMAGE, bounty: INJECT_BOUNTY,
             barBg, bar, barW: 32, barOffset: 28, shadow,
             vx: INJECT_SPEED, vy: 0, turnAt: 0,
             cloaked: false, cloakAt: 0, uncloakAt: 0, alive: true
@@ -1955,11 +1931,11 @@ export class Game extends Scene
     {
         const tiers: { at: number, run: () => void }[] = [
             { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
-            { at: 80, run: () => this.killPowerDomain(0) },
-            { at: 70, run: () => { this.bounty = 6; this.flashHud('BILLING THROTTLED  ·  BOUNTY $6'); } },
+            { at: 80, run: () => this.killRandomAz() },
+            { at: 70, run: () => { this.billing = 0.6; this.flashHud('BILLING THROTTLED  ·  BOUNTY -40%'); } },
             { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(7500); } },
             { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
-            { at: 40, run: () => { this.killPowerDomain(1); this.spikeMs = 4000; } },
+            { at: 40, run: () => { this.killRandomAz(); this.spikeMs = 4000; } },
             { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(5500); } },
             { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
             { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(3500); this.flashHud('ORIGIN FAILING'); } }
@@ -1984,34 +1960,59 @@ export class Game extends Scene
         });
     }
 
+    //  Origin damage takes a zone out, drawn from those still lit, so no two
+    //  runs degrade the same way. The integrity tiers decide when this fires,
+    //  which is what makes it "the more the origin is hit, the more goes dark".
+    killRandomAz ()
+    {
+        const lit: number[] = [];
+
+        for (let slot = 0; slot < PWR_NAMES.length; slot++)
+        {
+            if (!this.powerLost.includes(slot)) lit.push(slot);
+        }
+
+        if (lit.length === 0)
+        {
+            this.flashHud('EVERY ZONE IS ALREADY DARK');
+            return;
+        }
+
+        this.killPowerDomain(PhaserMath.RND.pick(lit));
+    }
+
     //  A power domain fails. One grid feeds every hall, so it goes dark in all
     //  of them — and is remembered, so a hall provisioned later opens dark too.
     killPowerDomain (slot: number)
     {
         this.powerLost.push(slot);
 
-        for (const region of this.regions) this.shroudPower(region, slot);
+        for (const region of this.regions)
+        {
+            //  Which zone goes with it depends on where that hall's rack sits,
+            //  so the same domain can take AZ-C in one hall and AZ-A in another.
+            this.darkenAz(region, this.azForDomain(region, slot));
+        }
+
+        const az = this.azForDomain(this.current(), slot);
+
+        this.flashHud(`${PWR_NAMES[slot]} OFFLINE  ·  ${az.name} TOWERS SLOWED`);
     }
 
-    //  Dimmed tiles and an offline label over one hall's power domain.
-    shroudPower (region: Region, slot: number)
+    //  A zone loses its feed. Its towers keep firing and keep their range, they
+    //  just reload AZ_SLOW times slower — see the tower loop in update().
+    darkenAz (region: Region, az: Az)
     {
-        const [col, row] = region.layout.power[slot];
-        const x = col * TILE;
-        const y = FLOOR_Y + row * TILE;
+        az.dark = true;
 
-        const shroud = this.add.rectangle(x, y, PWR_W * TILE, PWR_H * TILE, 0x000000, 0)
-            .setOrigin(0, 0)
-            .setDepth(3);
+        az.box.setStrokeStyle(2, AZ_LINE_DARK, 0.9);
+        az.label.setColor(AZ_TAG_DARK);
+        az.label.setText(`${az.name}  OFFLINE`);
 
-        const label = this.add.text(x + PWR_W * TILE / 2, y + PWR_H * TILE / 2, `${PWR_NAMES[slot]}\nOFFLINE`, {
-            fontFamily: 'Arial Black', fontSize: 14, color: '#ef4444', align: 'center'
-        }).setOrigin(0.5).setDepth(3).setAlpha(0);
-
-        region.layer.add([shroud, label]);
-
-        this.tweens.add({ targets: shroud, fillAlpha: 0.62, duration: 500 });
-        this.tweens.add({ targets: label, alpha: 0.75, duration: 500, delay: 200 });
+        for (const tower of region.towers)
+        {
+            if (tower.az === az) this.paintTower(tower);
+        }
     }
 
     //  Red edge pulse once the region is critical. Screen furniture, not board
@@ -2101,8 +2102,9 @@ export class Game extends Scene
 
         if (!reward) return;
 
-        this.score += 10 * enemy.bountyMult;
-        this.budget += this.bounty * enemy.bountyMult;
+        //  Every kill is worth the same 10 score; the money depends on the mob.
+        this.score += 10;
+        this.budget += Math.round(enemy.bounty * this.billing);
         this.budgetText.setText(`$${this.budget}`);
     }
 
@@ -2233,9 +2235,7 @@ export class Game extends Scene
             .setRotation(angle)
             .setDepth(7);
 
-        const flash = this.add.circle(tower.x, tower.y, 15, 0xffffff, 0.85).setDepth(8);
-
-        region.layer.add([glow, core, flash]);
+        region.layer.add([glow, core]);
 
         this.tweens.add({
             targets: core, scaleY: 0.08, alpha: 0, duration: 260, ease: 'Cubic.In',
@@ -2338,7 +2338,7 @@ export class Game extends Scene
         }
 
         this.cameras.main.shake(400, 0.012);
-        this.time.delayedCall(600, () => this.scene.start('GameOver', { score: this.score }));
+        this.time.delayedCall(600, () => this.scene.start('GameOver', { score: this.score, wave: this.wave }));
     }
 
     update (_time: number, delta: number)
@@ -2469,7 +2469,7 @@ export class Game extends Scene
             if (t.cooldown > 0) continue;
             if (!target) continue;
 
-            t.cooldown = t.spec.rate * penalty;
+            t.cooldown = t.spec.rate * penalty * (t.az.dark ? AZ_SLOW : 1);
             this.fire(t, target);
         }
 
@@ -2540,7 +2540,7 @@ export class Game extends Scene
             if (boss)
             {
                 this.cameras.main.shake(260, 0.008);
-                this.flashHud(`LEATHERBACK DOWN  ·  +$${this.bounty * TANK_BOUNTY_MULT}`, '#22c55e');
+                this.flashHud(`LEATHERBACK DOWN  ·  +$${Math.round(TANK_BOUNTY * this.billing)}`, '#22c55e');
             }
             return;
         }
@@ -2757,6 +2757,7 @@ export class Game extends Scene
             ['UNLOCK ALL TOWERS', () => this.unlockAll()],
             ['SPAWN NEXT WAVE NOW', () => this.forceWave()],
             ['PROVISION NEW REGION', () => this.provisionRegion()],
+            ['FAIL A RANDOM AZ', () => this.killRandomAz()],
             ['REPAIR TO 100%', () => this.repair()],
             ['CLEAR THE BOARD', () => this.clearEnemies()]
         ];
@@ -2839,6 +2840,7 @@ export class Game extends Scene
         this.integrity = 100;
         this.showIntegrity();
     }
+
 
     //  Every hall, not just the one on screen.
     clearEnemies ()

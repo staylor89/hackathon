@@ -326,17 +326,21 @@ const LAYOUTS: Layout[] = [HALL_A, flipRows(HALL_A), HALL_C, flipRows(HALL_C)];
 //
 //  Rate limiting throttles every mob on the board to a crawl for a few
 //  seconds — long enough to let the towers catch back up, short enough that
-//  it can't replace them. Calling the CTO clears the board outright, and pays
-//  no bounty: the CTO takes the credit.
-const RATE_LIMIT_COST = 750;
+//  it can't replace them. Raising AWS support undoes the damage but none of the
+//  permanent degradation it caused. Calling the CTO clears the board outright,
+//  and pays no bounty: the CTO takes the credit.
+const RATE_LIMIT_COST = 1000;
 const RATE_LIMIT_MS = 8000;   // how long the throttle holds
 const RATE_LIMIT_SLOW = 0.35; // mob speed while it does
-const CTO_COST = 2500;
+const SUPPORT_COST = 2500;
+const CTO_COST = 10000;
 
-//  The two buttons stack between the wave readout and the build buttons.
+//  Three buttons stack between the wave readout and the region tabs. The
+//  stride has to keep the bottom row inside the 64px HUD band: three rows of
+//  PWRUP_H plus 2px gaps, starting at 12, ends at 61.
 const PWRUP_X = 492;          // centre
 const PWRUP_W = 74;
-const PWRUP_H = 24;
+const PWRUP_H = 18;
 
 //  ── Degradation ──────────────────────────────────────────────────────────
 //  Every breach causes a temporary latency spike; each 10% of integrity lost
@@ -347,6 +351,12 @@ const SPIKE_MS = 1500;        // how long a spike lasts, grows with damage
 const BROWNOUT_EVERY = 4000;  // ms between brownouts once they start
 const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
 const OFFLINE = 0x475569;
+
+//  Repairing the origin brings a zone back at each of these. A threshold pays
+//  out once per crossing: it re-arms as soon as integrity falls back below it,
+//  so damage and repair can cycle. Unlike the degradation tiers, which are
+//  permanent, this is the only way a dark zone comes back.
+const RECOVERY_AT = [33, 66, 100];
 
 //  Every hall is divided into three availability zones: full-height bands of
 //  columns, drawn on the board so the player can see them before building. An
@@ -475,6 +485,11 @@ export class Game extends Scene
     latency = BASE_LATENCY;   // displayed p99, tweened back down after a spike
     tiersHit = 0;
     powerLost: number[] = []; // power domains already dark, replayed into new halls
+
+    //  RECOVERY_AT thresholds already paid out at the current integrity. Entries
+    //  are dropped as integrity falls back through them, which is what re-arms
+    //  them for the next repair.
+    recoveryClaimed: number[] = [];
 
     //  Which tower the next click builds, and which are bought at all.
     selected: TowerKind = 'iam';
@@ -673,6 +688,9 @@ export class Game extends Scene
         this.latency = BASE_LATENCY;
         this.tiersHit = 0;
         this.powerLost = [];
+        //  Starting at full health, every threshold is already banked, so no
+        //  repair pays out until damage has dropped integrity back through one.
+        this.recoveryClaimed = RECOVERY_AT.filter(at => this.integrity >= at);
         this.brownoutTimer = undefined;
         this.selected = 'iam';
         this.unlocked = { iam: true, shield: false, waf: false, snowmobile: false };
@@ -776,7 +794,7 @@ export class Game extends Scene
         //  damage is to the shared origin, not to the room it arrived in.
         for (const slot of this.powerLost)
         {
-            this.darkenAz(region, this.azForDomain(region, slot));
+            this.setAzPower(region, this.azForDomain(region, slot), true);
         }
 
         return region;
@@ -1114,17 +1132,19 @@ export class Game extends Scene
                 .setOrigin(0, 0)
                 .setStrokeStyle(2, AZ_LINE, 0.85);
 
-            const label = this.add.text(x + 6, FLOOR_Y + 4, `AZ-${String.fromCharCode(65 + i)}`, {
+            //  AWS zone ids: the hall's own region name, lowercased, plus a
+            //  1a / 1b / 1c suffix. Built once so the drawn label and the name
+            //  the HUD reports cannot drift apart.
+            const name = `${region.name.toLowerCase()}-1${String.fromCharCode(97 + i)}`;
+
+            const label = this.add.text(x + 6, FLOOR_Y + 4, name, {
                 fontFamily: 'Arial Black', fontSize: 11, color: AZ_TAG,
                 backgroundColor: 'rgba(11, 17, 32, 0.88)', padding: { x: 4, y: 1 }
             });
 
             region.layer.add([box, label]);
 
-            region.azs.push({
-                name: `AZ-${String.fromCharCode(65 + i)}`,
-                from, to, dark: false, box, label
-            });
+            region.azs.push({ name, from, to, dark: false, box, label });
         });
     }
 
@@ -1867,6 +1887,10 @@ export class Game extends Scene
         this.integrity = Math.max(0, this.integrity - damage);
         this.showIntegrity();
 
+        //  Re-arms any recovery threshold this breach dropped below. Restores
+        //  nothing: integrity only ever falls here.
+        this.applyRecovery();
+
         //  Light the hall's tab up so a breach you cannot see still tells you
         //  where it happened.
         region.alertUntil = this.time.now + REGION_ALERT_MS;
@@ -2016,9 +2040,7 @@ export class Game extends Scene
 
         for (const region of this.regions)
         {
-            //  Which zone goes with it depends on where that hall's rack sits,
-            //  so the same domain can take AZ-C in one hall and AZ-A in another.
-            this.darkenAz(region, this.azForDomain(region, slot));
+            this.setAzPower(region, this.azForDomain(region, slot), true);
         }
 
         const az = this.azForDomain(this.current(), slot);
@@ -2026,15 +2048,53 @@ export class Game extends Scene
         this.flashHud(`${PWR_NAMES[slot]} OFFLINE  ·  ${az.name} TOWERS SLOWED`);
     }
 
-    //  A zone loses its feed. Its towers keep firing and keep their range, they
-    //  just reload AZ_SLOW times slower — see the tower loop in update().
-    darkenAz (region: Region, az: Az)
+    //  Run after any change to integrity, in either direction. Falling through a
+    //  threshold re-arms it; rising through one spends it on a zone. A repair
+    //  straight to 100% crosses all three at once and can bring back three.
+    applyRecovery ()
     {
-        az.dark = true;
+        this.recoveryClaimed = this.recoveryClaimed.filter(at => this.integrity >= at);
 
-        az.box.setStrokeStyle(2, AZ_LINE_DARK, 0.9);
-        az.label.setColor(AZ_TAG_DARK);
-        az.label.setText(`${az.name}  OFFLINE`);
+        for (const at of RECOVERY_AT)
+        {
+            if (this.integrity < at || this.recoveryClaimed.includes(at)) continue;
+
+            this.recoveryClaimed.push(at);
+            this.restoreRandomAz();
+        }
+    }
+
+    //  Bring one zone back, drawn from those currently out, and free its slot so
+    //  a later failure can take it again.
+    restoreRandomAz ()
+    {
+        if (this.powerLost.length === 0) return;
+
+        const slot = PhaserMath.RND.pick(this.powerLost);
+
+        this.powerLost = this.powerLost.filter(s => s !== slot);
+
+        for (const region of this.regions)
+        {
+            this.setAzPower(region, this.azForDomain(region, slot), false);
+        }
+
+        const az = this.azForDomain(this.current(), slot);
+
+        this.flashHud(`${PWR_NAMES[slot]} RESTORED  ·  ${az.name} BACK ONLINE`, '#22c55e');
+    }
+
+    //  A zone gains or loses its feed. A dark zone's towers keep their range and
+    //  their targeting and just reload AZ_SLOW times slower — see the tower loop
+    //  in update(). Both directions run through here so the box, the label and
+    //  the tower tints can never disagree about whether the power is on.
+    setAzPower (region: Region, az: Az, dark: boolean)
+    {
+        az.dark = dark;
+
+        az.box.setStrokeStyle(2, dark ? AZ_LINE_DARK : AZ_LINE, dark ? 0.9 : 0.85);
+        az.label.setColor(dark ? AZ_TAG_DARK : AZ_TAG);
+        az.label.setText(dark ? `${az.name}  OFFLINE` : az.name);
 
         for (const tower of region.towers)
         {
@@ -2636,7 +2696,11 @@ export class Game extends Scene
         //  Incident response, stacked between the wave readout and the towers.
         this.makePowerup(0, 'RATE LIMIT', RATE_LIMIT_COST,
             () => this.time.now < this.rateLimitUntil, () => this.rateLimit());
-        this.makePowerup(1, 'CALL THE CTO', CTO_COST,
+        //  Label is abbreviated to survive fitText in a 74px box; the full name
+        //  is in the toast the button raises.
+        this.makePowerup(1, 'AWS SUPPORT', SUPPORT_COST,
+            () => false, () => this.raiseSupport());
+        this.makePowerup(2, 'CALL THE CTO', CTO_COST,
             () => false, () => this.callCto());
         this.paintPowerups();
     }
@@ -2645,18 +2709,18 @@ export class Game extends Scene
     //  clicking it spends the money and fires the effect on the spot.
     makePowerup (row: number, label: string, cost: number, on: () => boolean, run: () => void)
     {
-        const y = 20 + row * (PWRUP_H + 4);
+        const y = 12 + row * (PWRUP_H + 2);
 
         const box = this.add.rectangle(PWRUP_X, y, PWRUP_W, PWRUP_H)
             .setStrokeStyle(1, PAD_LINE, 0.9)
             .setDepth(10)
             .setInteractive({ useHandCursor: true });
 
-        const name = this.add.text(PWRUP_X, y - 5, label, {
+        const name = this.add.text(PWRUP_X, y - 4, label, {
             fontFamily: 'Arial Black', fontSize: 8, color: '#8ea3b8'
         }).setOrigin(0.5).setDepth(11);
 
-        const price = this.add.text(PWRUP_X, y + 6, `$${cost}`, {
+        const price = this.add.text(PWRUP_X, y + 4, `$${cost}`, {
             fontFamily: 'Arial', fontSize: 8, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
 
@@ -2714,6 +2778,42 @@ export class Game extends Scene
     //  Clear the board, everywhere. Pays no bounty — the CTO takes the credit.
     //  Refused with the buy-error buzz when there is nothing to destroy, so a
     //  misclick between waves cannot quietly eat the money.
+    //  Raise a ticket and the origin comes back to 100%. It buys back integrity
+    //  only: the tiers already tripped stay tripped, so a restored origin keeps
+    //  its dark zones, its brownouts and its cooling loss. tiersHit is left
+    //  alone deliberately, or the same tier would fire again on the way back
+    //  down and re-run one-shot effects like startVignette().
+    raiseSupport ()
+    {
+        if (this.over) return;
+
+        if (this.integrity >= 100)
+        {
+            this.flashHud('ORIGIN ALREADY AT 100%  ·  NOTHING TO RAISE');
+            return;
+        }
+
+        if (this.budget < SUPPORT_COST)
+        {
+            this.rejectPurchase();
+            return;
+        }
+
+        this.budget -= SUPPORT_COST;
+        this.budgetText.setText(`$${this.budget}`);
+
+        this.integrity = 100;
+        this.showIntegrity();
+
+        this.sfx('sfx-tower-unlock');
+        this.cameras.main.flash(240, 34, 197, 94);
+        this.flashHud('AWS SUPPORT RAISED  ·  ORIGIN RESTORED TO 100%', '#22c55e');
+
+        //  Last, so its own toast lands before any zone-restored toast replaces
+        //  it, and so the player reads the repair before the consequence.
+        this.applyRecovery();
+    }
+
     callCto ()
     {
         if (this.over) return;
@@ -2866,6 +2966,7 @@ export class Game extends Scene
     {
         this.integrity = 100;
         this.showIntegrity();
+        this.applyRecovery();
     }
 
 

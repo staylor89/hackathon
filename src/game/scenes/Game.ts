@@ -108,6 +108,11 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
 
 const TOWER_ORDER: TowerKind[] = ['iam', 'shield', 'waf', 'snowmobile'];
 
+//  How fast an emplacement swings onto a new target, in radians per second.
+//  The art is drawn facing right, so 0 rotation points at 0 degrees and no
+//  offset is needed between the sprite and the firing angle.
+const TURN_RATE = 9;
+
 //  Recoil. The emplacement slides back along its firing line and eases home.
 //  RECOIL_SETTLE is a per-second rate, so the return is framerate-independent.
 const RECOIL_PX = 4;
@@ -1974,6 +1979,11 @@ export class Game extends Scene
 
         this.sfx(spec.fireSfx, { volume: spec.fireVolume, minGap: spec.fireGap });
 
+        //  Snap onto the exact firing line: TURN_RATE may still be mid-swing,
+        //  and a shot leaving at an angle the barrel isn't pointing reads as a
+        //  bug rather than as a fast turret.
+        tower.sprite.rotation = angle;
+
         this.kick(tower, angle);
         this.muzzle(tower.region, tower.x, tower.y, angle);
         this.tracer(tower.region, tower.x, tower.y, tx, ty, angle);
@@ -2044,6 +2054,7 @@ export class Game extends Scene
         const cos = Math.cos(angle);
         const sin = Math.sin(angle);
 
+        tower.sprite.rotation = angle;
         this.kick(tower, angle);
 
         //  Project each mob onto the beam: `along` is how far down the lance it
@@ -2254,10 +2265,22 @@ export class Game extends Scene
 
             if (t.offline) continue;
 
+            //  Target is resolved every frame, not just when the cooldown is
+            //  up, so the emplacement can track a mob while it reloads and is
+            //  already lined up when it fires.
+            const target = this.nearestEnemy(region, t.x, t.y, t.spec.range, t.spec.seesCloaked);
+
+            if (target)
+            {
+                t.sprite.rotation = PhaserMath.Angle.RotateTo(
+                    t.sprite.rotation,
+                    PhaserMath.Angle.Between(t.x, t.y, target.obj.x, target.obj.y),
+                    TURN_RATE * dt
+                );
+            }
+
             t.cooldown -= delta;
             if (t.cooldown > 0) continue;
-
-            const target = this.nearestEnemy(region, t.x, t.y, t.spec.range, t.spec.seesCloaked);
             if (!target) continue;
 
             t.cooldown = t.spec.rate * penalty;

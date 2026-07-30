@@ -1060,15 +1060,42 @@ export class Game extends Scene
         return bar;
     }
 
-    //  Every tile in the hall is a buildable slot — no reserved cells, no
-    //  trench-adjacency rule. 176 pads a hall, so this is also the largest
+    //  Every tile is a buildable slot except the trench the mobs walk and the
+    //  origin rack. No trench-adjacency rule, so this is still the largest
     //  single source of interactive objects on the board.
     drawPads (region: Region)
     {
+        const layout = region.layout;
+        const blocked = new Set<string>();
+
+        //  The trench itself: walk each straight segment and mark every cell it
+        //  crosses, so nothing can be built in front of the walkers.
+        for (let i = 0; i < layout.waypoints.length - 1; i++)
+        {
+            const [c1, r1] = layout.waypoints[i];
+            const [c2, r2] = layout.waypoints[i + 1];
+            const steps = Math.max(Math.abs(c2 - c1), Math.abs(r2 - r1));
+            const dc = Math.sign(c2 - c1);
+            const dr = Math.sign(r2 - r1);
+
+            for (let s = 0; s <= steps; s++) blocked.add(`${c1 + dc * s},${r1 + dr * s}`);
+        }
+
+        //  The origin rack: 112x176 centred on ORIGIN_X and the layout's row, so
+        //  it covers the last two columns and the row either side. Derived from
+        //  originRow rather than listed, so a mirrored hall cannot forget it.
+        for (let row = layout.originRow - 1; row <= layout.originRow + 1; row++)
+        {
+            blocked.add(`14,${row}`);
+            blocked.add(`15,${row}`);
+        }
+
         for (let col = 0; col < COLS; col++)
         {
             for (let row = 0; row < ROWS; row++)
             {
+                if (blocked.has(`${col},${row}`)) continue;
+
                 this.makePad(region, col, row, this.azAt(region, col));
             }
         }

@@ -1,4 +1,4 @@
-import { Scene, GameObjects, Math as PhaserMath, TintModes } from 'phaser';
+import { Scene, GameObjects, Math as PhaserMath } from 'phaser';
 
 //  ── Layout ───────────────────────────────────────────────────────────────
 //  1024x768 canvas. Top 64px is the HUD band, the rest is a 16 x 11 grid of
@@ -25,19 +25,25 @@ const RACK = 0x0f1a2b;
 const RACK_LIP = 0x27384f;
 
 //  ── Balance ──────────────────────────────────────────────────────────────
+//  SHIELD: rapid fire, tiny per-shot damage. Built to shred swarms, poor
+//  against anything with real HP.
 const SHIELD_COST = 100;
 const SHIELD_RANGE = 130;
-const SHIELD_RATE = 450;      // ms between shots
-const SHIELD_DAMAGE = 10;
-const BULLET_SPEED = 620;     // px/sec
+const SHIELD_RATE = 120;      // ms between shots
+const SHIELD_DAMAGE = 4;
+const BULLET_SPEED = 780;     // px/sec — must outpace the fire rate
 
-const DDOS_SPEED = 110;       // px/sec along the trench
-const DDOS_HP = 30;           // +10 per wave
-const DDOS_DAMAGE = 10;       // integrity lost if it reaches the origin
-const DDOS_BOUNTY = 25;
-const DDOS_SCALE = 0.62;      // tortoise-default.png is 64x64; trench is 46px
-const SPAWN_EVERY = 1500;     // ms
-const WAVE_SIZE = 8;
+//  DDoS: small, fragile, arrives in a flood. Individually harmless.
+const DDOS_SPEED = 115;       // px/sec along the trench
+const DDOS_HP = 12;           // +3 per wave
+const DDOS_DAMAGE = 3;        // integrity lost if it reaches the origin
+const DDOS_BOUNTY = 8;
+const DDOS_SCALE = 0.34;      // tortoise-ddos.png is 64x64 → ~22px on screen
+
+const SWARM_BASE = 8;         // mobs in wave 1
+const SWARM_GROWTH = 2;       // extra mobs per wave
+const SWARM_SPACING = 180;    // ms between mobs inside a wave
+const WAVE_GAP = 6000;        // ms of quiet between waves
 
 //  ── Degradation ──────────────────────────────────────────────────────────
 //  Every breach causes a temporary latency spike; each 10% of integrity lost
@@ -89,15 +95,14 @@ export class Game extends Scene
     //  Run state
     budget = 500;
     integrity = 100;
-    wave = 1;
+    wave = 0;
     score = 0;
-    spawned = 0;
     over = false;
 
     //  Degradation state — all of this worsens as the origin takes damage.
     bounty = DDOS_BOUNTY;
     fireRateMult = 1;         // >1 means slower shots
-    spawnDelay = SPAWN_EVERY;
+    waveGap = WAVE_GAP;
     spikeMs = SPIKE_MS;
     spikeUntil = 0;           // scene time the current latency spike ends
     latency = BASE_LATENCY;   // displayed p99, tweened back down after a spike
@@ -136,16 +141,15 @@ export class Game extends Scene
         //  Scene restarts re-run create(), so reset everything by hand.
         this.budget = 500;
         this.integrity = 100;
-        this.wave = 1;
+        this.wave = 0;
         this.score = 0;
-        this.spawned = 0;
         this.over = false;
         this.enemies = [];
         this.towers = [];
         this.bullets = [];
         this.bounty = DDOS_BOUNTY;
         this.fireRateMult = 1;
-        this.spawnDelay = SPAWN_EVERY;
+        this.waveGap = WAVE_GAP;
         this.spikeMs = SPIKE_MS;
         this.spikeUntil = 0;
         this.latency = BASE_LATENCY;
@@ -162,7 +166,7 @@ export class Game extends Scene
         this.drawPads();
         this.drawHud();
 
-        this.setSpawnDelay(SPAWN_EVERY);
+        this.startWave();
 
         this.input.keyboard?.once('keydown-ESC', () => {
             this.scene.start('MainMenu');
@@ -436,22 +440,42 @@ export class Game extends Scene
 
     // ── Combat ───────────────────────────────────────────────────────────
 
+    //  Waves arrive as a burst of closely-spaced mobs, then a quiet gap.
+    startWave ()
+    {
+        if (this.over) return;
+
+        this.wave++;
+
+        const count = SWARM_BASE + (this.wave - 1) * SWARM_GROWTH;
+        this.waveText.setText(`WAVE ${this.wave}  ·  DDoS FLOOD  x${count}`);
+
+        this.time.addEvent({
+            delay: SWARM_SPACING,
+            repeat: count - 1,
+            callback: () => this.spawnDdos()
+        });
+
+        //  Next wave starts once this burst has landed plus the current gap,
+        //  which the degradation tiers shorten as the origin takes damage.
+        this.spawner = this.time.delayedCall(
+            count * SWARM_SPACING + this.waveGap,
+            () => this.startWave()
+        );
+    }
+
     spawnDdos ()
     {
         if (this.over) return;
 
-        this.spawned++;
-        this.wave = Math.floor((this.spawned - 1) / WAVE_SIZE) + 1;
-        this.waveText.setText(`WAVE ${this.wave}  ·  DDoS FLOOD`);
-
-        const maxHp = DDOS_HP + (this.wave - 1) * 10;
+        const maxHp = DDOS_HP + (this.wave - 1) * 3;
         const start = this.route.getStartPoint();
-        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-default')
+        const obj = this.add.follower(this.route, start.x, start.y, 'tortoise-ddos')
             .setDepth(5)
             .setScale(DDOS_SCALE);
 
-        const barBg = this.add.rectangle(0, 0, 28, 5, 0x000000, 0.6).setDepth(6);
-        const bar = this.add.rectangle(0, 0, 26, 3, RED).setOrigin(0, 0.5).setDepth(6);
+        const barBg = this.add.rectangle(0, 0, 20, 4, 0x000000, 0.6).setDepth(6);
+        const bar = this.add.rectangle(0, 0, 18, 2, RED).setOrigin(0, 0.5).setDepth(6);
 
         const enemy: Enemy = { obj, hp: maxHp, maxHp, barBg, bar, alive: true };
 
@@ -551,13 +575,13 @@ export class Game extends Scene
         const tiers: { at: number, run: () => void }[] = [
             { at: 90, run: () => { this.setStatus('DEGRADED', '#ff9900'); this.spikeMs = 2500; } },
             { at: 80, run: () => this.killPowerDomain(12, 0, 4, 3, 'PWR-A') },
-            { at: 70, run: () => { this.bounty = 20; this.flashHud('BILLING THROTTLED  ·  BOUNTY $20'); } },
-            { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setSpawnDelay(1300); } },
+            { at: 70, run: () => { this.bounty = 6; this.flashHud('BILLING THROTTLED  ·  BOUNTY $6'); } },
+            { at: 60, run: () => { this.setStatus('IMPAIRED', '#f97316'); this.setWaveGap(4500); } },
             { at: 50, run: () => { this.fireRateMult = 1.1; this.flashHud('COOLING LOSS  ·  TOWERS -10% RATE'); } },
             { at: 40, run: () => { this.killPowerDomain(0, 8, 4, 3, 'PWR-B'); this.spikeMs = 4000; } },
-            { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setSpawnDelay(1100); } },
+            { at: 30, run: () => { this.setStatus('CRITICAL', '#ef4444'); this.startVignette(); this.setWaveGap(3000); } },
             { at: 20, run: () => { this.startBrownouts(); this.flashHud('BROWNOUTS  ·  TOWERS DROPPING'); } },
-            { at: 10, run: () => { this.fireRateMult = 1.2; this.setSpawnDelay(900); this.flashHud('REGION FAILING'); } }
+            { at: 10, run: () => { this.fireRateMult = 1.2; this.setWaveGap(1500); this.flashHud('REGION FAILING'); } }
         ];
 
         //  tiersHit counts how many have fired, so each one runs exactly once
@@ -635,15 +659,10 @@ export class Game extends Scene
         });
     }
 
-    setSpawnDelay (ms: number)
+    //  Only affects the next gap — it never interrupts a wave in flight.
+    setWaveGap (ms: number)
     {
-        this.spawnDelay = ms;
-        this.spawner?.remove();
-        this.spawner = this.time.addEvent({
-            delay: ms,
-            loop: true,
-            callback: () => this.spawnDdos()
-        });
+        this.waveGap = ms;
     }
 
     //  Brief banner under the HUD when a tier trips.
@@ -677,7 +696,7 @@ export class Game extends Scene
 
     fire (tower: Tower, target: Enemy)
     {
-        const bullet = this.add.circle(tower.x, tower.y, 4, ACCENT).setDepth(6);
+        const bullet = this.add.circle(tower.x, tower.y, 2.5, ACCENT).setDepth(6);
         this.bullets.push({ obj: bullet, target });
     }
 
@@ -722,9 +741,9 @@ export class Game extends Scene
         {
             if (!e.alive) continue;
 
-            e.barBg.setPosition(e.obj.x, e.obj.y - 28);
-            e.bar.setPosition(e.obj.x - 13, e.obj.y - 28);
-            e.bar.width = 26 * (e.hp / e.maxHp);
+            e.barBg.setPosition(e.obj.x, e.obj.y - 18);
+            e.bar.setPosition(e.obj.x - 9, e.obj.y - 18);
+            e.bar.width = 18 * (e.hp / e.maxHp);
         }
 
         //  Towers acquire the closest target in range and shoot on cooldown.
@@ -793,10 +812,11 @@ export class Game extends Scene
             return;
         }
 
-        //  Flash white on damage. Phaser 4 splits tint colour from tint mode.
-        enemy.obj.setTint(0xffffff).setTintMode(TintModes.FILL);
-        this.time.delayedCall(60, () => {
-            if (enemy.alive) enemy.obj.setTintMode(TintModes.MULTIPLY).clearTint();
+        //  A spark per hit rather than a tint flash — at this fire rate a flash
+        //  would leave the mob white for most of its short life.
+        const spark = this.add.circle(enemy.obj.x, enemy.obj.y, 3, 0xffffff, 0.9).setDepth(7);
+        this.tweens.add({
+            targets: spark, alpha: 0, scale: 0.4, duration: 110, onComplete: () => spark.destroy()
         });
     }
 

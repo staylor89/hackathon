@@ -26,8 +26,8 @@ export class Preloader extends Scene
 
     preload ()
     {
-        //  DDoS intruder. 64x64, drawn facing right.
-        this.load.image('tortoise-default', 'assets/tortoise-default.png');
+        //  DDoS swarm tortoise. 64x64, drawn facing right.
+        this.load.image('tortoise-ddos', 'assets/tortoise-ddos.png');
     }
 
     create ()

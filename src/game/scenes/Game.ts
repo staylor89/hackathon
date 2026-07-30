@@ -52,7 +52,8 @@ interface TowerSpec {
     rate: number;             // ms between shots
     damage: number;
     bulletSpeed: number;      // px/sec — must outpace the fire rate
-    bulletRadius: number;
+    shot: string;             // projectile art, drawn at scale 1
+    shotFacing: boolean;      // rotate the shot to its heading, or leave radial
     seesCloaked: boolean;
     beam?: boolean;           // hits instantly along a line instead of firing a bullet
     colour: number;
@@ -67,14 +68,15 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     iam: {
         kind: 'iam', texture: 'tower-iam', name: 'IAM',
         unlock: 0, cost: 70, range: 120, rate: 340, damage: 9,
-        bulletSpeed: 700, bulletRadius: 3, seesCloaked: true,
+        bulletSpeed: 700, shot: 'shot-iam', shotFacing: true, seesCloaked: true,
         colour: CYAN, hex: '#38bdf8',
         fireSfx: 'sfx-iam-fire', fireGap: 70, fireVolume: 0.85
     },
     shield: {
         kind: 'shield', texture: 'tower-shield', name: 'SHIELD',
         unlock: 200, cost: 120, range: 130, rate: 120, damage: 4,
-        bulletSpeed: 780, bulletRadius: 2.5, seesCloaked: false,
+        //  Ring, so it carries no heading.
+        bulletSpeed: 780, shot: 'shot-shield', shotFacing: false, seesCloaked: false,
         colour: ACCENT, hex: '#ff9900',
         //  Fires every 120ms per tower and there can be a dozen of them, so the
         //  gap is most of the fire rate: at full board only about 1 shot in 6
@@ -85,15 +87,17 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
     waf: {
         kind: 'waf', texture: 'tower-waf', name: 'WAF',
         unlock: 350, cost: 200, range: 155, rate: 850, damage: 30,
-        bulletSpeed: 620, bulletRadius: 5, seesCloaked: false,
+        //  Flak burst, radial like the shield ring.
+        bulletSpeed: 620, shot: 'shot-waf', shotFacing: false, seesCloaked: false,
         colour: VIOLET, hex: '#a855f7',
         fireSfx: 'sfx-waf-fire', fireGap: 60, fireVolume: 1
     },
     snowmobile: {
         kind: 'snowmobile', texture: 'tower-snowmobile', name: 'SNOWMOBILE',
         unlock: 750, cost: 420, range: 200, rate: 4000, damage: 300,
-        //  Beam towers hit instantly, so the bullet fields go unused.
-        bulletSpeed: 0, bulletRadius: 0, seesCloaked: false, beam: true,
+        //  Beam towers hit instantly, so bulletSpeed goes unused and the slug is
+        //  decoration thrown down the lance after the damage has landed.
+        bulletSpeed: 0, shot: 'shot-snowmobile', shotFacing: true, seesCloaked: false, beam: true,
         colour: ICE, hex: '#67e8f9',
         //  720ms of discharge every 2.8s, so nothing needs throttling and it
         //  can sit loud — one of these firing should be the loudest thing on
@@ -241,14 +245,14 @@ interface Tower {
     sold: boolean;                      // stops queued brownouts touching it
     sprite: GameObjects.Image;          // state is expressed by tinting this
     pad: GameObjects.Rectangle;         // slot underneath, re-armed on sell
-    ring: GameObjects.Arc;
 }
 
 interface Bullet {
-    obj: GameObjects.Arc;
+    obj: GameObjects.Image;
     target: Enemy;
     damage: number;
     speed: number;
+    facing: boolean;                    // keep the art pointed down its heading
 }
 
 export class Game extends Scene
@@ -708,7 +712,7 @@ export class Game extends Scene
         }
     }
 
-    //  One buildable slot: hover shows the selected tower's range ring, click
+    //  One buildable slot: hover tints it in the armed tower's colour, click
     //  builds it.
     makePad (col: number, row: number)
     {
@@ -719,23 +723,15 @@ export class Game extends Scene
             .setStrokeStyle(1, PAD_LINE, 0.9)
             .setInteractive({ useHandCursor: true });
 
-        const ring = this.add.circle(x, y, TOWER_SPECS.shield.range, ACCENT, 0.07)
-            .setStrokeStyle(1, ACCENT, 0.35)
-            .setVisible(false);
-
         pad.on('pointerover', () => {
-            //  Ring is re-styled on every hover because the pick can change
-            //  between one hover and the next.
+            //  Restyled on every hover because the pick can change between one
+            //  hover and the next.
             const spec = TOWER_SPECS[this.selected];
             pad.setFillStyle(spec.colour, 0.16).setStrokeStyle(1, spec.colour, 0.9);
-            ring.setRadius(spec.range);
-            ring.setFillStyle(spec.colour, 0.07).setStrokeStyle(1, spec.colour, 0.35);
-            ring.setVisible(true);
         });
 
         pad.on('pointerout', () => {
             pad.setFillStyle(BG, 0).setStrokeStyle(1, PAD_LINE, 0.9);
-            ring.setVisible(false);
         });
 
         pad.on('pointerdown', () => {
@@ -754,15 +750,14 @@ export class Game extends Scene
 
             pad.disableInteractive();
             pad.setFillStyle(BG, 0).setStrokeStyle(1, spec.colour, 0.4);
-            ring.setVisible(false);
 
             //  The pad stays around underneath, disabled, so selling can hand
             //  the slot straight back.
-            this.buildTower(x, y, spec, pad, ring);
+            this.buildTower(x, y, spec, pad);
         });
     }
 
-    buildTower (x: number, y: number, spec: TowerSpec, pad: GameObjects.Rectangle, ring: GameObjects.Arc)
+    buildTower (x: number, y: number, spec: TowerSpec, pad: GameObjects.Rectangle)
     {
         //  The art is a 64x64 emplacement on a 50x50 baseplate, so it drops
         //  onto a 64px grid tile at scale 1 — no fitting, no label needed.
@@ -776,25 +771,21 @@ export class Game extends Scene
         this.sfx('sfx-tower-build');
 
         const tower: Tower = {
-            x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad, ring
+            x, y, spec, cooldown: 0, offline: false, sold: false, sprite, pad
         };
 
-        //  Hovering a built tower shows its real range and what it sells for.
+        //  Hovering a built tower shows what it sells for.
         const tag = this.add.text(x, y - 40, `SELL +$${refund(spec)}`, {
             fontFamily: 'Arial Black', fontSize: 11, color: '#22c55e',
             backgroundColor: '#0b1120', padding: { x: 4, y: 2 }
         }).setOrigin(0.5).setDepth(11).setVisible(false);
 
         sprite.on('pointerover', () => {
-            ring.setRadius(spec.range);
-            ring.setFillStyle(spec.colour, 0.07).setStrokeStyle(1, spec.colour, 0.35);
-            ring.setVisible(true);
             sprite.setTint(0x86efac);
             tag.setVisible(true);
         });
 
         sprite.on('pointerout', () => {
-            ring.setVisible(false);
             this.paintTower(tower);
             tag.setVisible(false);
         });
@@ -830,7 +821,6 @@ export class Game extends Scene
 
         //  Any bullet already in flight keeps going — it's paid for.
         const { x, y } = tower;
-        tower.ring.setVisible(false);
         tower.sprite.destroy();
 
         tower.pad.setInteractive({ useHandCursor: true });
@@ -1522,21 +1512,59 @@ export class Game extends Scene
             return;
         }
 
-        const bullet = this.add.circle(tower.x, tower.y, spec.bulletRadius, spec.colour).setDepth(6);
+        const tx = target.obj.x;
+        const ty = target.obj.y;
+        const angle = PhaserMath.Angle.Between(tower.x, tower.y, tx, ty);
 
         this.sfx(spec.fireSfx, { volume: spec.fireVolume, minGap: spec.fireGap });
 
-        //  The WAF slug is slow and fat, so give it a muzzle flash to read as a
-        //  heavy shot rather than a laggy one.
-        if (spec.kind === 'waf')
+        this.muzzle(tower.x, tower.y, angle);
+        this.tracer(tower.x, tower.y, tx, ty, angle);
+
+        const bullet = this.add.image(tower.x, tower.y, spec.shot).setDepth(6);
+
+        if (spec.shotFacing) bullet.setRotation(angle);
+
+        //  Shield's ring widens on the way out, so it reads as a pulse leaving
+        //  the plate rather than a pellet.
+        if (spec.kind === 'shield')
         {
-            const flash = this.add.circle(tower.x, tower.y, 12, spec.colour, 0.5).setDepth(5);
-            this.tweens.add({
-                targets: flash, scale: 1.8, alpha: 0, duration: 180, onComplete: () => flash.destroy()
-            });
+            bullet.setScale(0.4);
+            this.tweens.add({ targets: bullet, scale: 1, duration: 220, ease: 'Cubic.Out' });
         }
 
-        this.bullets.push({ obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed });
+        this.bullets.push({
+            obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed,
+            facing: spec.shotFacing
+        });
+    }
+
+    //  Bore bloom. Shared by projectile and beam towers, so the discharge and
+    //  the shot always start from the same flare.
+    muzzle (x: number, y: number, angle: number, to = 2.2)
+    {
+        const bloom = this.add.image(x, y, 'shot-muzzle').setRotation(angle).setDepth(7);
+
+        this.tweens.add({
+            targets: bloom, scale: to, alpha: 0, duration: 170,
+            onComplete: () => bloom.destroy()
+        });
+    }
+
+    //  The lane: stretched (not tiled) from bore to target and gone in 120ms,
+    //  which is short enough that Shield's 120ms cadence never stacks two.
+    tracer (x: number, y: number, tx: number, ty: number, angle: number)
+    {
+        const lane = this.add.image(x, y, 'shot-tracer')
+            .setOrigin(0, 0.5)
+            .setRotation(angle)
+            .setDisplaySize(PhaserMath.Distance.Between(x, y, tx, ty), 8)
+            .setDepth(5)
+            .setAlpha(0.55);
+
+        this.tweens.add({
+            targets: lane, alpha: 0, duration: 120, onComplete: () => lane.destroy()
+        });
     }
 
     //  Ice lance. No projectile — everything inside the swept line takes the
@@ -1592,10 +1620,22 @@ export class Game extends Scene
             onComplete: () => glow.destroy()
         });
 
-        const flash = this.add.circle(tower.x, tower.y, 15, 0xffffff, 0.85).setDepth(8);
+        this.muzzle(tower.x, tower.y, angle, 3.2);
+
+        //  Decoration: `struck` already took the damage the instant the tower
+        //  fired. The slug just gives the discharge something to follow.
+        const slug = this.add.image(tower.x, tower.y, spec.shot)
+            .setRotation(angle)
+            .setDepth(7);
+
         this.tweens.add({
-            targets: flash, scale: 2.4, alpha: 0, duration: 260,
-            onComplete: () => flash.destroy()
+            targets: slug,
+            x: tower.x + cos * len,
+            y: tower.y + sin * len,
+            alpha: 0,
+            duration: 230,
+            ease: 'Quad.In',
+            onComplete: () => slug.destroy()
         });
 
         //  Small kick so a discharge this expensive reads as an event.
@@ -1716,6 +1756,7 @@ export class Game extends Scene
         {
             if (!b.target.alive)
             {
+                this.tweens.killTweensOf(b.obj);
                 b.obj.destroy();
                 continue;
             }
@@ -1728,6 +1769,7 @@ export class Game extends Scene
             if (d <= step + 6)
             {
                 this.hit(b.target, b.damage);
+                this.tweens.killTweensOf(b.obj);
                 b.obj.destroy();
                 continue;
             }
@@ -1735,6 +1777,10 @@ export class Game extends Scene
             const angle = PhaserMath.Angle.Between(b.obj.x, b.obj.y, tx, ty);
             b.obj.x += Math.cos(angle) * step;
             b.obj.y += Math.sin(angle) * step;
+
+            //  Homing means the heading changes in flight, so point-first art
+            //  has to be re-aimed every frame, not just at spawn.
+            if (b.facing) b.obj.rotation = angle;
         }
 
         this.bullets = this.bullets.filter(b => b.obj.active);

@@ -45,6 +45,21 @@ export class Preloader extends Scene
         this.load.image('tower-waf', 'assets/tower-waf.png');
         this.load.image('tower-snowmobile', 'assets/tower-snowmobile.png');
 
+        //  Firing lanes. Every directional piece is drawn pointing right, same
+        //  as the mobs, so setRotation to the firing angle needs no offset.
+        this.load.image('shot-tracer', 'assets/shot-tracer.png');
+        this.load.image('shot-muzzle', 'assets/shot-muzzle.png');
+        this.load.image('shot-iam', 'assets/shot-iam.png');
+        this.load.image('shot-shield', 'assets/shot-shield.png');
+        this.load.image('shot-waf', 'assets/shot-waf.png');
+        this.load.image('shot-snowmobile', 'assets/shot-snowmobile.png');
+
+        //  Map overlays. map-flow is a seamless chevron tile whose 46px height
+        //  is the trench width; map-scan spans the floor's full 704px height.
+        this.load.image('map-flow', 'assets/map-flow.png');
+        this.load.image('map-scan', 'assets/map-scan.png');
+        this.load.image('map-node', 'assets/map-node.png');
+
         //  Sound. All synthesised by tools/make-sfx.mjs — 44.1kHz mono 16-bit
         //  WAV, deliberately not MP3: encoder padding puts 10-30ms of silence
         //  in front of every file, and Shield fires every 120ms.

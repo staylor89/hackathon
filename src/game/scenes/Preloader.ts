@@ -43,17 +43,19 @@ export class Preloader extends Scene
         this.load.image('tower-iam', 'assets/tower-iam.png');
         this.load.image('tower-shield', 'assets/tower-shield.png');
         this.load.image('tower-waf', 'assets/tower-waf.png');
+        this.load.image('tower-snowmobile', 'assets/tower-snowmobile.png');
 
         //  Sound. All synthesised by tools/make-sfx.mjs — 44.1kHz mono 16-bit
         //  WAV, deliberately not MP3: encoder padding puts 10-30ms of silence
         //  in front of every file, and Shield fires every 120ms.
         //
-        //  make-sfx.mjs also emits glacier / lambda / guardduty / snowmobile
-        //  firing sounds for towers that don't exist yet. They're left unloaded
-        //  on purpose — Web Audio decodes everything loaded here up front.
+        //  make-sfx.mjs also emits glacier / lambda / guardduty firing sounds
+        //  for towers that don't exist yet. They're left unloaded on purpose —
+        //  Web Audio decodes everything loaded here up front.
         this.load.audio('sfx-iam-fire', 'assets/sfx/tower-iam-fire.wav');
         this.load.audio('sfx-shield-fire', 'assets/sfx/tower-shield-fire.wav');
         this.load.audio('sfx-waf-fire', 'assets/sfx/tower-waf-fire.wav');
+        this.load.audio('sfx-snowmobile-fire', 'assets/sfx/tower-snowmobile-fire.wav');
 
         this.load.audio('sfx-tower-build', 'assets/sfx/tower-build.wav');
         this.load.audio('sfx-tower-sell', 'assets/sfx/tower-sell.wav');

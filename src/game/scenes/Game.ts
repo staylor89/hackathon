@@ -24,6 +24,7 @@ const PAD_LINE = 0x2a3f5a;
 const RACK = 0x0f1a2b;
 const RACK_LIP = 0x27384f;
 const VIOLET = 0xa855f7;
+const ICE = 0x67e8f9;
 
 //  ── Towers ───────────────────────────────────────────────────────────────
 //  IAM: the starter. Cheap, middling everything, and the only tower that can
@@ -32,10 +33,14 @@ const VIOLET = 0xa855f7;
 //  against anything with real HP.
 //  WAF: slow, expensive, huge per-shot damage. The answer to injection
 //  flyers; wasted on the DDoS swarm because most of each shot is overkill.
+//  SNOWMOBILE: the late-game money sink. Fires an instant ice lance instead
+//  of a bullet — enormous damage, once every few seconds, and it punches
+//  through everything standing in the line, so it pays off best aimed down a
+//  long straight of the trench. Terrible value against anything it one-shots.
 //
 //  unlock is a one-off purchase per run before the tower can be built at all.
 //  IAM starts unlocked so wave 1 is always playable.
-type TowerKind = 'iam' | 'shield' | 'waf';
+type TowerKind = 'iam' | 'shield' | 'waf' | 'snowmobile';
 
 interface TowerSpec {
     kind: TowerKind;
@@ -49,6 +54,7 @@ interface TowerSpec {
     bulletSpeed: number;      // px/sec — must outpace the fire rate
     bulletRadius: number;
     seesCloaked: boolean;
+    beam?: boolean;           // hits instantly along a line instead of firing a bullet
     colour: number;
     hex: string;
     fireSfx: string;
@@ -82,10 +88,31 @@ const TOWER_SPECS: Record<TowerKind, TowerSpec> = {
         bulletSpeed: 620, bulletRadius: 5, seesCloaked: false,
         colour: VIOLET, hex: '#a855f7',
         fireSfx: 'sfx-waf-fire', fireGap: 60, fireVolume: 1
+    },
+    snowmobile: {
+        kind: 'snowmobile', texture: 'tower-snowmobile', name: 'SNOWMOBILE',
+        unlock: 750, cost: 420, range: 200, rate: 4000, damage: 300,
+        //  Beam towers hit instantly, so the bullet fields go unused.
+        bulletSpeed: 0, bulletRadius: 0, seesCloaked: false, beam: true,
+        colour: ICE, hex: '#67e8f9',
+        //  720ms of discharge every 2.8s, so nothing needs throttling and it
+        //  can sit loud — one of these firing should be the loudest thing on
+        //  the board.
+        fireSfx: 'sfx-snowmobile-fire', fireGap: 0, fireVolume: 1
     }
 };
 
-const TOWER_ORDER: TowerKind[] = ['iam', 'shield', 'waf'];
+const TOWER_ORDER: TowerKind[] = ['iam', 'shield', 'waf', 'snowmobile'];
+
+//  Half the width of the ice lance: anything within this of the line takes the
+//  full hit, and the beam carries on past its target to the edge of range.
+const BEAM_HALF_WIDTH = 16;
+const BEAM_OVERSHOOT = 44;
+
+//  Text budget inside a HUD build button, and for the wave composition line.
+//  Both are fitText()'d because their content varies — see fitText().
+const PICKER_TEXT_W = 80;
+const WAVE_TEXT_W = 250;
 
 //  Selling a tower hands back half of what it cost.
 const SELL_RATE = 0.5;
@@ -161,7 +188,8 @@ const BROWNOUT_MS = 900;      // how long a browned-out tower stays dark
 const OFFLINE = 0x475569;
 
 //  Second HUD line. Rewritten on mute so the state is visible while presenting.
-const HINT = 'DATA HALL 1  ·  AZ-C  ·  ESC MENU  ·  M MUTE';
+const HINT = 'DATA HALL 1  ·  AZ-C  ·  CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
+const HINT_W = 500;          // fitText() budget — it must not reach the build buttons
 
 //  Cable route: enemies walk from off-screen left to the origin server.
 const WAYPOINTS: [number, number][] = [
@@ -238,7 +266,7 @@ export class Game extends Scene
 
     //  Which tower the next click builds, and which are bought at all.
     selected: TowerKind = 'iam';
-    unlocked: Record<TowerKind, boolean> = { iam: true, shield: false, waf: false };
+    unlocked: Record<TowerKind, boolean> = { iam: true, shield: false, waf: false, snowmobile: false };
 
     //  Live objects
     enemies: Enemy[] = [];
@@ -267,6 +295,7 @@ export class Game extends Scene
     statusText: GameObjects.Text;
     hintText: GameObjects.Text;
     vignette: GameObjects.Rectangle;
+    debugPanel?: GameObjects.Container;
     pickers: Partial<Record<TowerKind, {
         box: GameObjects.Rectangle,
         icon: GameObjects.Image,
@@ -335,7 +364,7 @@ export class Game extends Scene
         this.tiersHit = 0;
         this.brownoutTimer = undefined;
         this.selected = 'iam';
-        this.unlocked = { iam: true, shield: false, waf: false };
+        this.unlocked = { iam: true, shield: false, waf: false, snowmobile: false };
         this.pickers = {};
         this.waveLabel = '';
         this.burstEndsAt = 0;
@@ -352,6 +381,7 @@ export class Game extends Scene
         this.drawDecor();
         this.drawPads();
         this.drawHud();
+        this.buildDebugMenu();
 
         //  Build phase: nothing spawns until the player has had time to spend
         //  the opening budget.
@@ -366,13 +396,19 @@ export class Game extends Scene
         this.input.keyboard?.on('keydown-ONE', () => this.pick('iam'));
         this.input.keyboard?.on('keydown-TWO', () => this.pick('shield'));
         this.input.keyboard?.on('keydown-THREE', () => this.pick('waf'));
+        this.input.keyboard?.on('keydown-FOUR', () => this.pick('snowmobile'));
 
         //  Demoing this in a room full of people needs a kill switch. mute is
         //  on the global SoundManager, so it survives a scene restart.
         this.input.keyboard?.on('keydown-M', () => {
             this.sound.mute = !this.sound.mute;
-            this.hintText.setText(this.sound.mute ? `${HINT}  ·  MUTED` : HINT);
+            this.showHint();
         });
+
+        //  Backtick is the conventional console key, but it is awkward on some
+        //  layouts, so D opens the same panel.
+        this.input.keyboard?.on('keydown-BACKTICK', () => this.toggleDebug());
+        this.input.keyboard?.on('keydown-D', () => this.toggleDebug());
     }
 
     // ── Map ──────────────────────────────────────────────────────────────
@@ -792,6 +828,7 @@ export class Game extends Scene
                 picker.icon.setAlpha(0.3).setTint(OFFLINE);
                 picker.text.setColor('#5c728a');
                 picker.sub.setText(`UNLOCK $${spec.unlock}`).setColor('#8ea3b8');
+                this.fitText(picker.sub, PICKER_TEXT_W);
                 continue;
             }
 
@@ -800,6 +837,7 @@ export class Game extends Scene
             picker.icon.setAlpha(on ? 1 : 0.6).clearTint();
             picker.text.setColor(on ? spec.hex : '#5c728a');
             picker.sub.setText(picker.stats).setColor('#5c728a');
+            this.fitText(picker.sub, PICKER_TEXT_W);
         }
     }
 
@@ -910,6 +948,10 @@ export class Game extends Scene
         this.lastWaveText = text;
         this.waveText.setText(text);
         this.waveText.setColor(quiet ? '#38bdf8' : '#8ea3b8');
+
+        //  Late waves list four mob types and would otherwise reach the build
+        //  buttons; the countdown line is short and stays at full size.
+        this.fitText(this.waveText, WAVE_TEXT_W);
     }
 
     //  The default intruder. Walks the trench like the flood does, but dashes
@@ -1150,6 +1192,15 @@ export class Game extends Scene
         enemy.turnAt = this.time.now + PhaserMath.Between(INJECT_TURN_MIN, INJECT_TURN_MAX);
     }
 
+    //  Push this.integrity to the HUD readout and the bar on the origin rack.
+    showIntegrity ()
+    {
+        this.integrityText.setText(`INTEGRITY ${this.integrity}%`);
+        this.integrityText.setColor(this.integrity <= 30 ? '#ef4444' : '#8ea3b8');
+        this.integrityBar.width = this.integrity;
+        this.integrityBar.setFillStyle(this.integrity <= 30 ? RED : this.integrity <= 60 ? ACCENT : GREEN);
+    }
+
     //  Enemy reached the origin server.
     breach (enemy: Enemy)
     {
@@ -1160,10 +1211,7 @@ export class Game extends Scene
         this.killEnemy(enemy, false);
 
         this.integrity = Math.max(0, this.integrity - damage);
-        this.integrityText.setText(`INTEGRITY ${this.integrity}%`);
-        this.integrityText.setColor(this.integrity <= 30 ? '#ef4444' : '#8ea3b8');
-        this.integrityBar.width = this.integrity;
-        this.integrityBar.setFillStyle(this.integrity <= 30 ? RED : this.integrity <= 60 ? ACCENT : GREEN);
+        this.showIntegrity();
 
         //  A flyer landing on the origin is a much bigger event than one more
         //  packet in the flood.
@@ -1366,6 +1414,13 @@ export class Game extends Scene
     fire (tower: Tower, target: Enemy)
     {
         const spec = tower.spec;
+
+        if (spec.beam)
+        {
+            this.fireBeam(tower, target);
+            return;
+        }
+
         const bullet = this.add.circle(tower.x, tower.y, spec.bulletRadius, spec.colour).setDepth(6);
 
         this.sfx(spec.fireSfx, { volume: spec.fireVolume, minGap: spec.fireGap });
@@ -1381,6 +1436,69 @@ export class Game extends Scene
         }
 
         this.bullets.push({ obj: bullet, target, damage: spec.damage, speed: spec.bulletSpeed });
+    }
+
+    //  Ice lance. No projectile — everything inside the swept line takes the
+    //  full hit the moment the tower fires, so the visual is pure decoration.
+    fireBeam (tower: Tower, target: Enemy)
+    {
+        const spec = tower.spec;
+        const angle = PhaserMath.Angle.Between(tower.x, tower.y, target.obj.x, target.obj.y);
+        const len = spec.range + BEAM_OVERSHOOT;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+
+        //  Project each mob onto the beam: `along` is how far down the lance it
+        //  sits, `off` is how far off the centre line.
+        const struck: Enemy[] = [];
+
+        for (const e of this.enemies)
+        {
+            if (!e.alive) continue;
+            if (e.cloaked && !spec.seesCloaked) continue;
+
+            const dx = e.obj.x - tower.x;
+            const dy = e.obj.y - tower.y;
+            const along = dx * cos + dy * sin;
+
+            if (along < 0 || along > len) continue;
+            if (Math.abs(dy * cos - dx * sin) > BEAM_HALF_WIDTH) continue;
+
+            struck.push(e);
+        }
+
+        //  hit() can kill, and killEnemy() only flips a flag, so iterating the
+        //  snapshot is safe.
+        for (const e of struck) this.hit(e, spec.damage);
+
+        const glow = this.add.rectangle(tower.x, tower.y, len, BEAM_HALF_WIDTH * 2, spec.colour, 0.32)
+            .setOrigin(0, 0.5)
+            .setRotation(angle)
+            .setDepth(6);
+
+        const core = this.add.rectangle(tower.x, tower.y, len, 10, 0xffffff, 0.95)
+            .setOrigin(0, 0.5)
+            .setRotation(angle)
+            .setDepth(7);
+
+        this.tweens.add({
+            targets: core, scaleY: 0.08, alpha: 0, duration: 260, ease: 'Cubic.In',
+            onComplete: () => core.destroy()
+        });
+
+        this.tweens.add({
+            targets: glow, scaleY: 1.8, alpha: 0, duration: 340, ease: 'Cubic.Out',
+            onComplete: () => glow.destroy()
+        });
+
+        const flash = this.add.circle(tower.x, tower.y, 15, 0xffffff, 0.85).setDepth(8);
+        this.tweens.add({
+            targets: flash, scale: 2.4, alpha: 0, duration: 260,
+            onComplete: () => flash.destroy()
+        });
+
+        //  Small kick so a discharge this expensive reads as an event.
+        this.cameras.main.shake(90, 0.002);
     }
 
     nearestEnemy (x: number, y: number, range: number, seesCloaked: boolean): Enemy | null
@@ -1579,39 +1697,157 @@ export class Game extends Scene
             fontFamily: 'Arial Black', fontSize: 20, color: '#e6edf3'
         }).setDepth(10);
 
-        this.hintText = this.add.text(16, 40, this.sound.mute ? `${HINT}  ·  MUTED` : HINT, {
+        this.hintText = this.add.text(16, 42, '', {
             fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
         }).setDepth(10);
+        this.showHint();
 
-        this.budgetText = this.add.text(1014, 4, `$${this.budget}`, {
-            fontFamily: 'Arial Black', fontSize: 20, color: '#ff9900'
+        this.budgetText = this.add.text(1014, 2, `$${this.budget}`, {
+            fontFamily: 'Arial Black', fontSize: 19, color: '#ff9900'
         }).setOrigin(1, 0).setDepth(10);
 
-        //  Three build buttons filling the right-hand end of the band.
-        this.makePicker('iam', 686, '1');
-        this.makePicker('shield', 816, '2');
-        this.makePicker('waf', 946, '3');
+        //  Four build buttons fill the right-hand 480px of the band, which is
+        //  most of it — everything else is packed into three short rows on the
+        //  left and fitText()'d so nothing can grow into the buttons.
+        this.makePicker('iam', 591, '1');
+        this.makePicker('shield', 711, '2');
+        this.makePicker('waf', 831, '3');
+        this.makePicker('snowmobile', 951, '4');
         this.refreshPickers();
 
-        this.waveText = this.add.text(430, 10, 'WAVE 1', {
-            fontFamily: 'Arial', fontSize: 15, color: '#8ea3b8'
+        this.statusText = this.add.text(182, 2, 'HEALTHY', {
+            fontFamily: 'Arial Black', fontSize: 15, color: '#22c55e'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.integrityText = this.add.text(430, 30, 'INTEGRITY 100%', {
+        this.latencyText = this.add.text(182, 22, `p99 ${BASE_LATENCY}ms`, {
+            fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
+        }).setOrigin(0.5, 0).setDepth(10);
+
+        this.waveText = this.add.text(402, 4, 'WAVE 1', {
+            fontFamily: 'Arial', fontSize: 13, color: '#8ea3b8'
+        }).setOrigin(0.5, 0).setDepth(10);
+
+        this.integrityText = this.add.text(402, 24, 'INTEGRITY 100%', {
             fontFamily: 'Arial Black', fontSize: 14, color: '#8ea3b8'
         }).setOrigin(0.5, 0).setDepth(10);
 
-        this.add.text(430, 48, 'click a slot to build  ·  click a tower to sell', {
-            fontFamily: 'Arial', fontSize: 11, color: '#5c728a'
-        }).setOrigin(0.5, 0).setDepth(10);
+    }
 
-        this.statusText = this.add.text(216, 14, 'HEALTHY', {
-            fontFamily: 'Arial Black', fontSize: 16, color: '#22c55e'
-        }).setOrigin(0.5, 0).setDepth(10);
+    //  Bottom HUD line: flavour plus every key binding, rewritten on mute so
+    //  the audio state is visible while presenting.
+    showHint ()
+    {
+        this.hintText.setText(this.sound.mute ? `${HINT}  ·  MUTED` : HINT);
+        this.fitText(this.hintText, HINT_W);
+    }
 
-        this.latencyText = this.add.text(216, 40, `p99 ${BASE_LATENCY}ms`, {
-            fontFamily: 'Arial', fontSize: 12, color: '#5c728a'
-        }).setOrigin(0.5, 0).setDepth(10);
+    //  Nothing in the HUD band has anywhere to overflow to, so any text whose
+    //  content varies — the wave composition, a tower name, an unlock price —
+    //  is scaled down to its slot instead of running into its neighbour.
+    fitText (text: GameObjects.Text, max: number)
+    {
+        text.setScale(Math.min(1, max / text.width));
+    }
+
+    // ── Debug menu ───────────────────────────────────────────────────────
+
+    //  Backtick or D toggles a panel of cheats. Deliberately not behind a
+    //  build flag: being able to jump to a boss wave with $50k in hand while
+    //  demoing beats keeping the shipped build honest.
+    buildDebugMenu ()
+    {
+        const actions: [string, () => void][] = [
+            ['+ $1,000', () => this.grant(1000)],
+            ['+ $10,000', () => this.grant(10000)],
+            ['UNLOCK ALL TOWERS', () => this.unlockAll()],
+            ['SPAWN NEXT WAVE NOW', () => this.forceWave()],
+            ['REPAIR TO 100%', () => this.repair()],
+            ['CLEAR THE BOARD', () => this.clearEnemies()]
+        ];
+
+        const W = 208;
+        const ROW = 28;
+        const PAD = 12;
+        const TOP = 40;
+
+        const panel = this.add.container(24, 110).setDepth(20).setVisible(false);
+
+        //  Interactive so a click landing between two buttons is swallowed
+        //  rather than building a tower on the pad hidden behind the panel.
+        const bg = this.add.rectangle(0, 0, W + PAD * 2, TOP + actions.length * ROW + PAD, 0x0d1727, 0.97)
+            .setOrigin(0, 0)
+            .setStrokeStyle(2, ACCENT, 0.7)
+            .setInteractive();
+
+        const title = this.add.text(PAD, 12, 'DEBUG  ·  ` OR D TO CLOSE', {
+            fontFamily: 'Arial Black', fontSize: 12, color: '#ff9900'
+        });
+
+        panel.add([bg, title]);
+
+        actions.forEach(([label, run], i) => {
+            const y = TOP + i * ROW;
+
+            const box = this.add.rectangle(PAD, y, W, ROW - 4, BG, 0.6)
+                .setOrigin(0, 0)
+                .setStrokeStyle(1, PAD_LINE, 0.9)
+                .setInteractive({ useHandCursor: true });
+
+            const text = this.add.text(PAD + 10, y + 6, label, {
+                fontFamily: 'Arial', fontSize: 12, color: '#e6edf3'
+            });
+
+            box.on('pointerover', () => box.setStrokeStyle(1, ACCENT, 1).setFillStyle(ACCENT, 0.18));
+            box.on('pointerout', () => box.setStrokeStyle(1, PAD_LINE, 0.9).setFillStyle(BG, 0.6));
+            box.on('pointerdown', () => {
+                this.sfx('sfx-ui-click', { volume: 0.7 });
+                run();
+            });
+
+            panel.add([box, text]);
+        });
+
+        this.debugPanel = panel;
+    }
+
+    toggleDebug ()
+    {
+        this.debugPanel?.setVisible(!this.debugPanel.visible);
+    }
+
+    grant (amount: number)
+    {
+        this.budget += amount;
+        this.budgetText.setText(`$${this.budget}`);
+    }
+
+    unlockAll ()
+    {
+        for (const k of TOWER_ORDER) this.unlocked[k] = true;
+        this.refreshPickers();
+    }
+
+    //  Cancel whatever the wave clock was waiting for and start the next wave.
+    forceWave ()
+    {
+        if (this.over) return;
+
+        this.spawner.remove();
+        this.startWave();
+    }
+
+    //  Integrity only — the degradation tiers a run has already tripped are
+    //  permanent, so a repaired origin keeps its brownouts and cooling loss.
+    repair ()
+    {
+        this.integrity = 100;
+        this.showIntegrity();
+    }
+
+    clearEnemies ()
+    {
+        for (const e of [...this.enemies]) this.killEnemy(e, false);
+        this.enemies = [];
     }
 
     //  One HUD build button. Clicking it, or pressing its number, buys the
@@ -1620,23 +1856,30 @@ export class Game extends Scene
     {
         const spec = TOWER_SPECS[kind];
 
-        const box = this.add.rectangle(x, 41, 122, 38)
+        const box = this.add.rectangle(x, 40, 116, 40)
             .setStrokeStyle(1, PAD_LINE, 0.9)
             .setDepth(10)
             .setInteractive({ useHandCursor: true });
 
         //  Same emplacement art as the board, shrunk to a button icon.
-        const icon = this.add.image(x - 46, 41, spec.texture).setScale(0.46).setDepth(11);
+        const icon = this.add.image(x - 43, 40, spec.texture).setScale(0.4).setDepth(11);
 
-        const text = this.add.text(x + 10, 34, `${key}  ${spec.name}  $${spec.cost}`, {
-            fontFamily: 'Arial Black', fontSize: 11, color: '#5c728a'
+        //  Text sits in the 80px right of the icon. SNOWMOBILE is wider than
+        //  that, so both lines are fitted rather than trusted to fit.
+        const text = this.add.text(x + 14, 31, `${key}  ${spec.name}`, {
+            fontFamily: 'Arial Black', fontSize: 10, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
 
-        const stats = `${spec.damage} dmg  ·  ${(1000 / spec.rate).toFixed(1)}/s`;
+        //  Cost lives on the stat line because the names no longer leave room
+        //  for it above — and while locked this line shows the unlock price.
+        const stats = `$${spec.cost}  ·  ${spec.damage} dmg  ·  ${(1000 / spec.rate).toFixed(1)}/s`;
 
-        const sub = this.add.text(x + 10, 49, stats, {
-            fontFamily: 'Arial', fontSize: 10, color: '#5c728a'
+        const sub = this.add.text(x + 14, 46, stats, {
+            fontFamily: 'Arial', fontSize: 9, color: '#5c728a'
         }).setOrigin(0.5).setDepth(11);
+
+        this.fitText(text, PICKER_TEXT_W);
+        this.fitText(sub, PICKER_TEXT_W);
 
         box.on('pointerdown', () => this.pick(kind));
 

@@ -191,6 +191,11 @@ const OFFLINE = 0x475569;
 const HINT = 'DATA HALL 1  ·  AZ-C  ·  CLICK PAD BUILD  ·  CLICK TOWER SELL  ·  ESC MENU  ·  M MUTE  ·  ` DEBUG';
 const HINT_W = 500;          // fitText() budget — it must not reach the build buttons
 
+//  ── Music ────────────────────────────────────────────────────────────────
+//  Music loses every fight with a sound effect, so it sits well below them.
+const MUSIC_VOL = 0.5;
+const MUSIC_FADE = 900;       // ms of crossfade between tracks
+
 //  Cable route: enemies walk from off-screen left to the origin server.
 const WAYPOINTS: [number, number][] = [
     [-1, 1], [4, 1], [4, 4], [1, 4], [1, 8], [6, 8], [6, 3], [10, 3], [10, 7], [13, 7]
@@ -344,6 +349,84 @@ export class Game extends Scene
         });
     }
 
+    // ── Music ────────────────────────────────────────────────────────────
+
+    music?: Phaser.Sound.BaseSound;
+    musicKey = '';
+
+    //  Crossfade to a track, or do nothing if it is already the one playing.
+    //  Both loops are the same key and tempo, so the overlap in the middle of a
+    //  fade is harmonically fine even though the two are not beat-aligned.
+    //
+    //  volume is deliberately only ever touched through a tween: it lives on
+    //  the concrete WebAudioSound/HTML5AudioSound classes rather than on the
+    //  BaseSound type that add() returns.
+    playMusic (key: string, fade = MUSIC_FADE)
+    {
+        if (this.musicKey === key) return;
+        this.musicKey = key;
+
+        const outgoing = this.music;
+        if (outgoing)
+        {
+            this.tweens.add({
+                targets: outgoing, volume: 0, duration: fade,
+                onComplete: () => outgoing.destroy()
+            });
+        }
+
+        const incoming = this.sound.add(key, { loop: true, volume: 0 });
+        incoming.play();
+        this.tweens.add({ targets: incoming, volume: MUSIC_VOL, duration: fade });
+
+        this.music = incoming;
+    }
+
+    //  Boss music holds for as long as a leatherback is on the board, which
+    //  outlasts its own wave — a tank crawls for nearly a minute and the wave
+    //  gap is ten seconds, so the next wave routinely starts while it is still
+    //  inbound.
+    bossActive ()
+    {
+        return this.enemies.some(e => e.alive && e.boss);
+    }
+
+    refreshMusic ()
+    {
+        this.playMusic(this.bossActive() ? 'music-boss' : 'music-core');
+    }
+
+    //  Fade out and leave it stopped. Used on the way into the game over screen.
+    stopMusic (fade = MUSIC_FADE)
+    {
+        const outgoing = this.music;
+        this.music = undefined;
+        this.musicKey = '';
+
+        if (!outgoing) return;
+
+        this.tweens.add({
+            targets: outgoing, volume: 0, duration: fade,
+            onComplete: () => outgoing.destroy()
+        });
+    }
+
+    //  Hard stop, no tween. Scene tweens die with the scene, so a fade started
+    //  on shutdown would never complete and the loop would play forever under
+    //  the menu.
+    //
+    //  Goes by key rather than destroying this.music, because a shutdown landing
+    //  mid-crossfade leaves an outgoing track that nothing else holds a
+    //  reference to: its fade tween is gone with the scene, so it would sit
+    //  there looping at whatever volume it had reached.
+    killMusic ()
+    {
+        this.sound.removeByKey('music-core');
+        this.sound.removeByKey('music-boss');
+        this.music = undefined;
+        this.musicKey = '';
+    }
+
     create ()
     {
         //  Scene restarts re-run create(), so reset everything by hand.
@@ -388,6 +471,13 @@ export class Game extends Scene
         this.nextWaveAt = this.time.now + PREP_MS;
         this.spawner = this.time.delayedCall(PREP_MS, () => this.startWave());
         this.flashHud('BUILD PHASE  ·  SPEND YOUR BUDGET', '#38bdf8');
+
+        //  Fade in over the build phase rather than starting cold.
+        this.playMusic('music-core', 2200);
+
+        //  ESC and restarts both come through here. Without it the loop keeps
+        //  playing under the main menu, and a second run stacks a second copy.
+        this.events.once('shutdown', () => this.killMusic());
 
         this.input.keyboard?.once('keydown-ESC', () => {
             this.scene.start('MainMenu');
@@ -875,12 +965,19 @@ export class Game extends Scene
 
         if (tanks > 0)
         {
+            //  Switch on the announcement, not on the spawn: the first tank is
+            //  still on a timer at this point, so bossActive() is false and
+            //  refreshMusic() would put the bed back on.
+            this.playMusic('music-boss', 600);
             this.sfx('sfx-wave-boss');
             this.flashHud(`BOSS WAVE  ·  LEATHERBACK  ·  -${TANK_DAMAGE}% IF IT LANDS`);
             this.cameras.main.shake(500, 0.004);
         }
         else
         {
+            //  Not a plain playMusic('music-core') — a tank from the last boss
+            //  wave may well still be crawling, and it keeps its music.
+            this.refreshMusic();
             this.sfx('sfx-wave-start', { volume: 0.85 });
         }
 
@@ -1404,6 +1501,10 @@ export class Game extends Scene
             enemy.shadow.destroy();
         }
 
+        //  Covers both routes a boss leaves the board by: killed, or reaching
+        //  the origin. Once the last one is gone the bed comes back.
+        if (enemy.boss) this.refreshMusic();
+
         if (!reward) return;
 
         this.score += 10 * enemy.bountyMult;
@@ -1530,6 +1631,7 @@ export class Game extends Scene
 
         //  Every firing sound is now dead, so this has the mix to itself. The
         //  SoundManager is global, so the tail carries into the GameOver scene.
+        this.stopMusic(500);
         this.sfx('sfx-region-down');
 
         for (const e of this.enemies) if (e.alive) e.follower?.pauseFollow();

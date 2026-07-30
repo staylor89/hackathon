@@ -48,11 +48,13 @@ Then in a scene's `create()`:
 this.add.image(512, 384, 'tortoise');
 ```
 
-## Sound
+## Sound and music
 
-Sound effects are synthesised, not sourced: `node tools/make-sfx.mjs` writes the whole set into `public/assets/sfx/`. Recipes live in that script's `SOUNDS` map, so re-tuning audio never touches TypeScript. Files are 44.1 kHz mono 16-bit WAV rather than MP3, because encoder padding puts 10-30ms of silence in front of every MP3 and Shield fires every 120ms.
+All audio is synthesised, not sourced. `npm run sfx` writes the one-shots and `npm run music` writes the two loops, both into `public/assets/sfx/`; shared DSP primitives live in `tools/dsp.mjs`. Recipes live in the generator scripts, so re-tuning audio never touches TypeScript. Files are 44.1 kHz mono 16-bit WAV rather than MP3, because encoder padding puts 10-30ms of silence in front of every MP3 — a quarter of Shield's fire interval, and an audible hiccup on every pass of a loop.
 
-Never call `this.sound.play()` directly from gameplay code. Use `Game.sfx(key, opts)`, which throttles retriggers via `minGap` and detunes each play slightly. Without both, the board's 50+ shots a second mix into white noise. Firing throttles live on `TowerSpec` as `fireGap` alongside the balance numbers. **M** toggles mute.
+Never call `this.sound.play()` directly from gameplay code. Use `Game.sfx(key, opts)`, which throttles retriggers via `minGap` and detunes each play slightly. Without both, the board's 50+ shots a second mix into white noise. Firing throttles live on `TowerSpec` as `fireGap` alongside the balance numbers.
+
+Music is two loops, `music-core` and `music-boss`, crossfaded by `Game.playMusic()`. **Both are A minor at 96 BPM and must stay that way** — the game crossfades them mid-wave while they are not beat-aligned, so shared key and tempo is what keeps the overlap listenable. Boss music holds while any boss is alive, which outlasts its own wave. **M** toggles mute.
 
 ## Phaser 4 knowledge
 

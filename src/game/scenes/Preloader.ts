@@ -76,6 +76,13 @@ export class Preloader extends Scene
 
         this.load.audio('sfx-ui-click', 'assets/sfx/ui-click.wav');
         this.load.audio('sfx-place-denied', 'assets/sfx/place-denied.wav');
+
+        //  Music. Two loops from tools/make-music.mjs, both A minor at 96 BPM —
+        //  sharing key and tempo is what lets the game crossfade between them
+        //  mid-wave without a car crash. 2.5 MB the pair; WAV again, because a
+        //  compressed loop hiccups at the seam on every pass.
+        this.load.audio('music-core', 'assets/sfx/music-core.wav');
+        this.load.audio('music-boss', 'assets/sfx/music-boss.wav');
     }
 
     create ()

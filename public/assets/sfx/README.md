@@ -1,14 +1,15 @@
-# EU-Tort-3 sound effects
+# EU-Tort-3 audio
 
-Every file here is synthesised by `tools/make-sfx.mjs`. Nothing is sampled or
-sourced, so there is no licence to track and the whole set is tunable in one
-place. Regenerate with:
+Every file here is synthesised. Nothing is sampled or sourced, so there is no
+licence to track and the whole set is tunable in one place:
 
-    node tools/make-sfx.mjs
+    npm run sfx      # tools/make-sfx.mjs   — 22 one-shots
+    npm run music    # tools/make-music.mjs — 2 loops
 
-The script is seeded, so regenerating produces byte-identical files. Edit a
-recipe in the `SOUNDS` map and re-run; keys and filenames stay put, so audio can
-be re-tuned at any point without touching TypeScript.
+Shared synthesis primitives live in `tools/dsp.mjs`. Both scripts are seeded, so
+regenerating produces byte-identical files. Edit a recipe in `SOUNDS` (one-shots)
+or a `core()` / `boss()` arrangement (music) and re-run; keys and filenames stay
+put, so audio can be re-tuned at any point without touching TypeScript.
 
 ## Format
 
@@ -17,9 +18,11 @@ be re-tuned at any point without touching TypeScript.
 Phaser 4 defaults to `WebAudioSoundManager`, which decodes each file into an
 `AudioBuffer` at preload, so compression only saves download size. WAV is worth
 the bytes here: MP3 and AAC both prepend 10-30ms of encoder silence and Phaser
-has no per-sound offset trim, which on a tower firing every 120ms is a quarter
-of the interval. The loaded set is ~570 KB uncompressed, which is invisible on a
-local dev server.
+has no per-sound offset trim. On a tower firing every 120ms that is a quarter of
+the interval, and on a loop it is an audible hiccup on every single pass. The
+loaded set is ~570 KB of effects plus 2.5 MB of music, which is invisible on a
+local dev server. If the deployed bundle ever matters, halving the music sample
+rate to 22.05 kHz is the cheapest win; do not reach for MP3.
 
 Every file starts and ends at a zero sample (1ms in-ramp, 4ms out-ramp) so
 playback never ticks. The in-ramp lands on the transient for the shortest
@@ -71,6 +74,49 @@ satisfies that, so no manual unlock handling is needed.
 
 Levels are deliberately uneven. Firing and hit sounds sit low because dozens
 overlap; the once-per-wave and once-per-run events get the headroom.
+
+## Music
+
+| Key | File | Length | Peak | Plays during |
+|-----|------|--------|------|--------------|
+| `music-core` | `music-core.wav` | 8 bars / 20.00s | -14 dBFS | Normal play. Am-F-C-G, half-time kick, offbeat hats, sparse arp |
+| `music-boss` | `music-boss.wav` | 4 bars / 10.00s | -14 dBFS | Boss waves. Four-on-the-floor, 16th bass, timpani, Bb over the A root |
+
+Both are **A minor at 96 BPM**. That is a hard constraint, not a coincidence:
+the game crossfades between them mid-wave, and the tracks are not beat-aligned
+when it does, so shared key and tempo is the only thing keeping the overlap
+listenable. If you retune one, retune the other.
+
+The core loop is deliberately unmemorable. It plays for an entire run, so
+anything with a real hook would be intolerable by wave 12; the job is to imply a
+machine room, not to be liked. The boss loop earns its contrast structurally
+(double-time drums, a semitone clash) rather than by getting louder.
+
+Loops are made seamless by `fold()` in `dsp.mjs`: render the loop plus a tail,
+then add the overhang back over the start, so decays that run past the end are
+already ringing at the beginning. `declick()` must never be used on a loop, since
+a fade at either end is a hole at the seam.
+
+Verified after generation: both files are an exact whole number of bars
+(882000 and 441000 samples), and the RMS across the loop seam matches the RMS
+across every internal bar line to within about 1dB, so the loop point is not
+audible as an event.
+
+### How the game switches
+
+`Game.playMusic(key, fade)` crossfades and no-ops if the track is already
+playing. Boss music starts on the **wave announcement** rather than on the first
+tank spawn, because the spawn is still on a timer at that point. It then holds
+for as long as any boss is alive, which routinely outlasts its own wave: a
+leatherback crawls for nearly a minute and the wave gap is ten seconds, so the
+next wave usually starts while the boss is still inbound. `refreshMusic()` is
+what returns to the bed, called from `killEnemy` so it covers a boss both dying
+and reaching the origin.
+
+`killMusic()` on scene shutdown goes via `sound.removeByKey()` rather than
+destroying `this.music`, because a shutdown landing mid-crossfade leaves an
+outgoing track that nothing holds a reference to; its fade tween dies with the
+scene and it would otherwise loop forever under the main menu.
 
 ## Generated but not loaded
 

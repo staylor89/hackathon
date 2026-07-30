@@ -18,7 +18,9 @@
     "build": "node log.js build & vite build --config vite/config.prod.mjs",
     "dev-nolog": "vite --config vite/config.dev.mjs",
     "build-nolog": "vite build --config vite/config.prod.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sfx": "node tools/make-sfx.mjs",
+    "music": "node tools/make-music.mjs"
   },
   "devDependencies": {
     "typescript": "~5.7.2",
